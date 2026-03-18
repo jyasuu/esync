@@ -1,45 +1,36 @@
 /// tests/test_watch_cdc.rs
-/// Integration tests for `esync watch` — Postgres LISTEN/NOTIFY → Elasticsearch CDC.
-/// Spawns the watch loop as a background Tokio task, performs DB mutations,
-/// then polls ES until the expected state appears or a timeout fires.
-/// Requires: Postgres (esync_test seeded) + Elasticsearch.
+/// Integration tests for `esync watch` — Postgres LISTEN/NOTIFY → ES CDC.
+/// All tests are serialised to avoid races on shared DB rows and ES indices.
 mod common;
 use common::*;
 
 use anyhow::Result;
 use esync::{config::Config, db, elastic::EsClient, indexer};
+use serial_test::serial;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-
-// ── Shared setup ──────────────────────────────────────────────────────────
 
 async fn setup() -> Result<(sqlx::PgPool, EsClient, Config)> {
     let cfg = Config::load(CFG_PATH)?;
     let pool = db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?;
     let es = EsClient::new(&cfg.elasticsearch)?;
     reseed(&pool).await?;
-
-    // Pre-build indices so CDC upserts land on existing indices
     for entity in &cfg.entities {
         indexer::rebuild_index(&pool, &es, entity).await?;
         es_refresh(&entity.index).await?;
     }
-
     Ok((pool, es, cfg))
 }
 
-/// Spawn the watch loop as a background task.
 fn spawn_watch(cfg: Config) -> JoinHandle<()> {
     tokio::spawn(async move {
         let args = esync::commands::watch::WatchArgs { entity: vec![] };
-        // run() loops forever; we abort() the handle to stop it
         let _ = esync::commands::watch::run(cfg, args).await;
     })
 }
 
-// ── INSERT ────────────────────────────────────────────────────────────────
-
 #[tokio::test]
+#[serial]
 async fn test_cdc_insert_propagates_to_es() -> Result<()> {
     let (pool, _es, cfg) = setup().await?;
     let watch = spawn_watch(cfg);
@@ -68,9 +59,8 @@ async fn test_cdc_insert_propagates_to_es() -> Result<()> {
     Ok(())
 }
 
-// ── UPDATE ────────────────────────────────────────────────────────────────
-
 #[tokio::test]
+#[serial]
 async fn test_cdc_update_propagates_to_es() -> Result<()> {
     let (pool, _es, cfg) = setup().await?;
     let watch = spawn_watch(cfg);
@@ -102,18 +92,13 @@ async fn test_cdc_update_propagates_to_es() -> Result<()> {
     Ok(())
 }
 
-// ── DELETE ────────────────────────────────────────────────────────────────
-
 #[tokio::test]
+#[serial]
 async fn test_cdc_delete_removes_from_es() -> Result<()> {
     let (pool, _es, cfg) = setup().await?;
 
-    // Confirm present before watch starts
     let before = es_get("test_products", PRODUCT_5).await?;
-    assert!(
-        before.is_some(),
-        "PRODUCT_5 must exist in ES before the test"
-    );
+    assert!(before.is_some(), "PRODUCT_5 must exist before delete");
 
     let watch = spawn_watch(cfg);
 
@@ -146,14 +131,12 @@ async fn test_cdc_delete_removes_from_es() -> Result<()> {
     Ok(())
 }
 
-// ── Rapid mutations ───────────────────────────────────────────────────────
-
 #[tokio::test]
+#[serial]
 async fn test_cdc_rapid_mutations_settle() -> Result<()> {
     let (pool, _es, cfg) = setup().await?;
     let watch = spawn_watch(cfg);
 
-    // Fire 10 rapid updates; final stock = 9 * 10 = 90
     for i in 0u32..10 {
         sqlx::query("UPDATE products SET stock = $1 WHERE id = $2")
             .bind(i as i32 * 10)
@@ -178,10 +161,7 @@ async fn test_cdc_rapid_mutations_settle() -> Result<()> {
 
     watch.abort();
     let _ = watch.await;
-    assert!(
-        settled,
-        "Final stock value (90) should settle in ES within 10 s"
-    );
+    assert!(settled, "Final stock (90) should settle in ES within 10 s");
 
     reseed(&pool).await?;
     Ok(())

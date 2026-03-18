@@ -60,26 +60,51 @@ FOR EACH ROW EXECUTE FUNCTION esync_cdc_notify('test_products_changes');
 -- Call this to load a reproducible dataset for every test run.
 CREATE OR REPLACE PROCEDURE seed_test_data() AS $$
 BEGIN
-    DELETE FROM orders;
-    DELETE FROM products;
+    -- Remove any extra rows inserted by tests (keep only fixed UUIDs)
+    DELETE FROM orders  WHERE id NOT IN (
+        '10000000-0000-0000-0000-000000000001',
+        '10000000-0000-0000-0000-000000000002',
+        '10000000-0000-0000-0000-000000000003'
+    );
+    DELETE FROM products WHERE id NOT IN (
+        '00000000-0000-0000-0000-000000000001',
+        '00000000-0000-0000-0000-000000000002',
+        '00000000-0000-0000-0000-000000000003',
+        '00000000-0000-0000-0000-000000000004',
+        '00000000-0000-0000-0000-000000000005'
+    );
 
-    INSERT INTO products (id, name, description, price, stock, active, created_at) VALUES
-        ('00000000-0000-0000-0000-000000000001', 'Alpha Widget',   'First widget',  9.99,  100, true,  '2024-01-01T00:00:00Z'),
-        ('00000000-0000-0000-0000-000000000002', 'Beta Gizmo',     'Second gizmo',  49.99, 50,  true,  '2024-02-01T00:00:00Z'),
-        ('00000000-0000-0000-0000-000000000003', 'Gamma Doohickey','Third item',    199.00, 10, true,  '2024-03-01T00:00:00Z'),
-        ('00000000-0000-0000-0000-000000000004', 'Delta Thing',    'Inactive item', 1.00,  0,   false, '2024-04-01T00:00:00Z'),
-        ('00000000-0000-0000-0000-000000000005', 'Epsilon Part',   'Spare part',    5.50,  200, true,  '2024-05-01T00:00:00Z');
+    -- Upsert fixed rows so concurrent calls never hit PK conflicts
+    INSERT INTO products (id, name, description, price, stock, active, created_at, updated_at) VALUES
+        ('00000000-0000-0000-0000-000000000001', 'Alpha Widget',    'First widget',  9.99,  100, true,  '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+        ('00000000-0000-0000-0000-000000000002', 'Beta Gizmo',      'Second gizmo',  49.99, 50,  true,  '2024-02-01T00:00:00Z', '2024-02-01T00:00:00Z'),
+        ('00000000-0000-0000-0000-000000000003', 'Gamma Doohickey', 'Third item',    199.00,10,  true,  '2024-03-01T00:00:00Z', '2024-03-01T00:00:00Z'),
+        ('00000000-0000-0000-0000-000000000004', 'Delta Thing',     'Inactive item', 1.00,  0,   false, '2024-04-01T00:00:00Z', '2024-04-01T00:00:00Z'),
+        ('00000000-0000-0000-0000-000000000005', 'Epsilon Part',    'Spare part',    5.50,  200, true,  '2024-05-01T00:00:00Z', '2024-05-01T00:00:00Z')
+    ON CONFLICT (id) DO UPDATE SET
+        name        = EXCLUDED.name,
+        description = EXCLUDED.description,
+        price       = EXCLUDED.price,
+        stock       = EXCLUDED.stock,
+        active      = EXCLUDED.active,
+        deleted_at  = NULL,
+        updated_at  = EXCLUDED.updated_at;
 
-    INSERT INTO orders (id, customer_id, status, total, placed_at, metadata) VALUES
+    INSERT INTO orders (id, customer_id, status, total, placed_at, deleted_at, metadata) VALUES
         ('10000000-0000-0000-0000-000000000001',
          'aaaaaaaa-0000-0000-0000-000000000001',
-         'completed', 59.98, '2024-01-15T10:00:00Z', '{"source":"web"}'),
+         'completed', 59.98, '2024-01-15T10:00:00Z', NULL, '{"source":"web"}'),
         ('10000000-0000-0000-0000-000000000002',
          'aaaaaaaa-0000-0000-0000-000000000002',
-         'pending',  199.00, '2024-02-20T12:00:00Z', '{"source":"mobile"}'),
+         'pending',  199.00, '2024-02-20T12:00:00Z', NULL, '{"source":"mobile"}'),
         ('10000000-0000-0000-0000-000000000003',
          'aaaaaaaa-0000-0000-0000-000000000001',
-         'cancelled', 9.99,  '2024-03-01T08:00:00Z', '{"source":"web","promo":"SAVE10"}');
+         'cancelled', 9.99,  '2024-03-01T08:00:00Z', NULL, '{"source":"web","promo":"SAVE10"}')
+    ON CONFLICT (id) DO UPDATE SET
+        status     = EXCLUDED.status,
+        total      = EXCLUDED.total,
+        deleted_at = NULL,
+        metadata   = EXCLUDED.metadata;
 END;
 $$ LANGUAGE plpgsql;
 

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared test helpers.
 //! Import via:  mod common; use common::*;
 
