@@ -23,8 +23,17 @@ pub async fn fetch_rows(
     let col_list = columns.join(", ");
     let where_clause = filter.map(|f| format!("WHERE {f}")).unwrap_or_default();
 
+    // Cast every column to TEXT so we get a stable, unambiguous string
+    // representation regardless of the underlying PG type. ES receives the
+    // strings and coerces them via its own mappings (date, scaled_float, etc.).
+    let cast_list = columns
+        .iter()
+        .map(|c| format!("{c}::TEXT AS {c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     let sql = format!(
-        "SELECT {col_list} FROM {table} {where_clause} ORDER BY 1 LIMIT {limit} OFFSET {offset}"
+        "SELECT {cast_list} FROM {table} {where_clause} ORDER BY 1 LIMIT {limit} OFFSET {offset}"
     );
 
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
@@ -46,47 +55,13 @@ fn row_to_map(
 ) -> Result<HashMap<String, serde_json::Value>> {
     let mut map = HashMap::new();
     for &col in columns {
-        map.insert(col.to_string(), try_decode(row, col));
-    }
-    Ok(map)
-}
-
-/// Attempt each concrete Postgres type; the first successful decode wins.
-/// Falls back to String, then Null.
-fn try_decode(row: &sqlx::postgres::PgRow, col: &str) -> serde_json::Value {
-    // bool — must come before integers to avoid mis-typing
-    if let Ok(v) = row.try_get::<Option<bool>, _>(col) {
-        return v
-            .map(serde_json::Value::Bool)
-            .unwrap_or(serde_json::Value::Null);
-    }
-    // integers
-    if let Ok(v) = row.try_get::<Option<i32>, _>(col) {
-        return v
-            .map(|n| serde_json::Value::Number(n.into()))
-            .unwrap_or(serde_json::Value::Null);
-    }
-    if let Ok(v) = row.try_get::<Option<i64>, _>(col) {
-        return v
-            .map(|n| serde_json::Value::Number(n.into()))
-            .unwrap_or(serde_json::Value::Null);
-    }
-    // floats
-    if let Ok(v) = row.try_get::<Option<f64>, _>(col) {
-        return v
-            .and_then(serde_json::Number::from_f64)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null);
-    }
-    // JSONB / JSON
-    if let Ok(v) = row.try_get::<Option<serde_json::Value>, _>(col) {
-        return v.unwrap_or(serde_json::Value::Null);
-    }
-    // Everything else as text
-    if let Ok(v) = row.try_get::<Option<String>, _>(col) {
-        return v
+        // Every column was cast to TEXT in the query, so we only need String.
+        let val = row
+            .try_get::<Option<String>, _>(col)
+            .unwrap_or(None)
             .map(serde_json::Value::String)
             .unwrap_or(serde_json::Value::Null);
+        map.insert(col.to_string(), val);
     }
-    serde_json::Value::Null
+    Ok(map)
 }
