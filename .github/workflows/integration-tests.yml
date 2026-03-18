@@ -1,0 +1,141 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  ESYNC_CONFIG: esync.test.yaml
+  ESYNC_LOG: warn
+
+jobs:
+  # ── Unit + mapping tests (no infra needed) ────────────────────────────────
+  unit-tests:
+    name: Unit Tests (mapping)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Lint
+        run: cargo clippy -- -D warnings
+
+      - name: Format check
+        run: cargo fmt -- --check
+
+      - name: Run mapping unit tests
+        run: cargo test --test test_mapping -- --nocapture
+
+  # ── Integration tests (Postgres + ES needed) ─────────────────────────────
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: esync
+          POSTGRES_PASSWORD: esync
+          POSTGRES_DB: esync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install psql client
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Create test database
+        env:
+          PGPASSWORD: esync
+        run: |
+          psql -h localhost -U esync -d postgres \
+            -c "CREATE DATABASE esync_test;"
+          psql -h localhost -U esync -d esync_test \
+            -f scripts/test/setup_test_db.sql
+
+      - name: Wait for Elasticsearch
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:9200/_cluster/health \
+              | grep -v '"status":"red"' && break || sleep 2
+          done
+
+      - name: Clean stale test indices
+        run: |
+          for idx in test_products test_orders \
+              it_create_delete it_recreate it_get_index \
+              it_doc_crud it_doc_delete it_bulk it_search it_mappings \
+              it-test-template it-test-policy; do
+            curl -sf -X DELETE "http://localhost:9200/${idx}" || true
+          done
+
+      - name: Run ES client tests
+        run: cargo test --test test_elastic -- --nocapture
+
+      - name: Run index command tests
+        run: cargo test --test test_index_command -- --nocapture
+
+      - name: Run GraphQL server tests
+        run: cargo test --test test_graphql -- --nocapture
+
+      - name: Run CDC watch tests
+        run: cargo test --test test_watch_cdc -- --nocapture
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            *.log
+            /tmp/esync-*.log
