@@ -166,7 +166,21 @@ impl EsClient {
 
         let body: Value = resp.json().await?;
         if body["errors"].as_bool().unwrap_or(false) {
-            tracing::warn!("Bulk had errors: {}", serde_json::to_string_pretty(&body)?);
+            // Collect the first failed item's reason for a useful error message
+            let reason = body["items"]
+                .as_array()
+                .and_then(|items| {
+                    items.iter().find_map(|item| {
+                        let op = item.get("index").or_else(|| item.get("create"))?;
+                        if op["status"].as_i64().unwrap_or(200) >= 400 {
+                            op["error"]["reason"].as_str().map(str::to_owned)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or_else(|| "unknown bulk error".to_string());
+            anyhow::bail!("Bulk indexing failed: {reason}");
         }
         Ok(())
     }
