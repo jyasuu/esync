@@ -272,6 +272,12 @@ fn build_search_field(
                     // Meta fields
                     m.insert("_score".to_owned(), hit["_score"].clone());
                     m.insert("_id".to_owned(), hit["_id"].clone());
+                    // Mirror _id into the entity id_column so scalar fields like `id` resolve.
+                    // The indexer stores the PK as the ES document _id (not in _source).
+                    if let Some(doc_id) = hit["_id"].as_str() {
+                        m.entry(entity.id_column.clone())
+                            .or_insert_with(|| JsValue::String(doc_id.to_owned()));
+                    }
                     // Highlight: build per-field first-fragment map
                     let hl_map: serde_json::Map<String, serde_json::Value> = hit["highlight"]
                         .as_object()

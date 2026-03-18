@@ -112,6 +112,7 @@ entities:
         - field: search_text
       highlight:
         - name
+        - description
       live_columns:
         - stock
     columns:

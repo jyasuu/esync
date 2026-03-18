@@ -18,7 +18,7 @@ use common::*;
 use anyhow::Result;
 use esync::{config::Config, db, elastic::EsClient, indexer};
 use serial_test::serial;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tokio::task::JoinHandle;
 
 // ── Setup ─────────────────────────────────────────────────────────────────
