@@ -50,10 +50,16 @@ pub fn build_schema(cfg: &Config, pool: Arc<PgPool>) -> Result<Schema> {
                 let pool   = Arc::clone(&pool_list);
                 let entity = entity_c.clone();
                 FieldFuture::new(async move {
-                    let limit  = ctx.args.get("limit").and_then(|v| v.i64()).unwrap_or(20);
-                    let offset = ctx.args.get("offset").and_then(|v| v.i64()).unwrap_or(0);
-                    let search = ctx.args.get("search")
-                        .and_then(|v| v.string().map(str::to_owned));
+                    // ValueAccessor::i64() / string() return Result in async-graphql v7;
+                    // use .ok() to convert to Option, falling back to defaults.
+                    let limit: i64  = ctx.args.get("limit")
+                        .and_then(|v| v.i64().ok())
+                        .unwrap_or(20);
+                    let offset: i64 = ctx.args.get("offset")
+                        .and_then(|v| v.i64().ok())
+                        .unwrap_or(0);
+                    let search: Option<String> = ctx.args.get("search")
+                        .and_then(|v| v.string().ok().map(str::to_owned));
 
                     let cols: Vec<&str> = entity.columns.iter()
                         .filter(|c| c.graphql)
@@ -96,8 +102,9 @@ pub fn build_schema(cfg: &Config, pool: Arc<PgPool>) -> Result<Schema> {
                 let pool   = Arc::clone(&pool_get);
                 let entity = entity_g.clone();
                 FieldFuture::new(async move {
-                    let id = ctx.args.get("id")
-                        .and_then(|v| v.string().map(str::to_owned))
+                    // string() returns Result<&str, Error> in v7 — use .ok()
+                    let id: String = ctx.args.get("id")
+                        .and_then(|v| v.string().ok().map(str::to_owned))
                         .ok_or_else(|| async_graphql::Error::new("id is required"))?;
 
                     let cols: Vec<&str> = entity.columns.iter()
@@ -134,7 +141,6 @@ pub fn build_schema(cfg: &Config, pool: Arc<PgPool>) -> Result<Schema> {
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
-/// CamelCase → snake_case  (e.g. "ProductOrder" → "product_order")
 fn snake(s: &str) -> String {
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -146,11 +152,11 @@ fn snake(s: &str) -> String {
 
 fn pg_to_gql_type(pg: &PgType) -> TypeRef {
     match pg {
-        PgType::Bool                                                 => TypeRef::named(TypeRef::BOOLEAN),
-        PgType::Int2 | PgType::Int4                                  => TypeRef::named(TypeRef::INT),
+        PgType::Bool                => TypeRef::named(TypeRef::BOOLEAN),
+        PgType::Int2 | PgType::Int4 => TypeRef::named(TypeRef::INT),
         PgType::Int8 | PgType::Numeric | PgType::Float4 | PgType::Float8
-                                                                     => TypeRef::named(TypeRef::FLOAT),
-        _                                                            => TypeRef::named(TypeRef::STRING),
+                                    => TypeRef::named(TypeRef::FLOAT),
+        _                           => TypeRef::named(TypeRef::STRING),
     }
 }
 

@@ -33,7 +33,7 @@ struct AppState {
 }
 
 pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
-    let pool = Arc::new(db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?);
+    let pool   = Arc::new(db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?);
     let schema = Arc::new(graphql::build_schema(&cfg, pool)?);
 
     let host       = args.host.as_deref().unwrap_or(&cfg.graphql.host).to_string();
@@ -43,13 +43,14 @@ pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
     let state = AppState { schema, playground };
 
     let app = Router::new()
-        .route("/graphql", post(graphql_handler).get(playground_handler))
-        .route("/healthz",  get(|| async { "ok" }))
+        .route("/graphql", post(graphql_handler))
+        .route("/graphql", get(playground_handler))
+        .route("/healthz",  get(health_handler))
         .with_state(state)
         .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = format!("{host}:{port}");
-    tracing::info!("GraphQL endpoint  → http://{addr}/graphql");
+    tracing::info!("GraphQL endpoint    → http://{addr}/graphql");
     if playground {
         tracing::info!("GraphiQL playground → http://{addr}/graphql");
     }
@@ -71,9 +72,13 @@ async fn playground_handler(State(state): State<AppState>) -> impl IntoResponse 
         Html(
             GraphiQLSource::build()
                 .endpoint("/graphql")
-                .finish()
+                .finish(),
         ).into_response()
     } else {
         axum::http::StatusCode::NOT_FOUND.into_response()
     }
+}
+
+async fn health_handler() -> &'static str {
+    "ok"
 }

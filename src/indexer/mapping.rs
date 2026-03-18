@@ -54,7 +54,7 @@ pub fn build_mappings(columns: &[ColumnConfig]) -> Value {
     json!({ "properties": properties })
 }
 
-fn build_field_def(es_type: &EsFieldType, col: &ColumnConfig) -> Value {
+fn build_field_def(es_type: &EsFieldType, _col: &ColumnConfig) -> Value {
     match es_type {
         EsFieldType::ScaledFloat => json!({
             "type": "scaled_float",

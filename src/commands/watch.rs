@@ -1,7 +1,6 @@
 use crate::{config::Config, db, elastic::EsClient};
 use anyhow::Result;
 use clap::Args;
-use futures::StreamExt;
 use serde::Deserialize;
 use sqlx::postgres::PgListener;
 

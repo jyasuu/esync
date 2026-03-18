@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 
