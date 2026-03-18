@@ -71,6 +71,10 @@ pub async fn rebuild_index(
                 other => other.to_string().trim_matches('"').to_owned(),
             };
 
+            // Re-insert the id so search_text::build can use it for relation lookups
+            // (HasMany and ManyToMany need entity.id_column to exist in own_row)
+            row.insert(entity.id_column.clone(), raw_id.clone());
+
             // Build and inject search_text when configured
             if let Some(st_cfg) = &entity.search_text {
                 match search_text::build(&row, pool, entity, st_cfg, config).await {
