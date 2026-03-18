@@ -1,7 +1,7 @@
 // Modules live in lib.rs; the binary imports them via the crate name.
+use esync::{commands, config};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use esync::{commands, config};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// esync — Sync PostgreSQL → Elasticsearch via GraphQL
@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Serve(args) => commands::serve::run(cfg, args).await,
         Commands::Index(args) => commands::index::run(cfg, args).await,
-        Commands::Es(cmd) => commands::es::run(cfg, cmd).await,
+        Commands::Es(cmd)     => commands::es::run(cfg, cmd).await,
         Commands::Watch(args) => commands::watch::run(cfg, args).await,
     }
 }

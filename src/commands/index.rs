@@ -23,14 +23,12 @@ pub struct IndexArgs {
 
 pub async fn run(cfg: Config, args: IndexArgs) -> Result<()> {
     let pool = db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?;
-    let es = EsClient::new(&cfg.elasticsearch)?;
+    let es   = EsClient::new(&cfg.elasticsearch)?;
 
     let entities: Vec<_> = if args.entity.is_empty() {
         cfg.entities.iter().collect()
     } else {
-        let filtered: Vec<_> = cfg
-            .entities
-            .iter()
+        let filtered: Vec<_> = cfg.entities.iter()
             .filter(|e| args.entity.contains(&e.name))
             .collect();
         if filtered.is_empty() {
@@ -40,7 +38,7 @@ pub async fn run(cfg: Config, args: IndexArgs) -> Result<()> {
     };
 
     for entity in entities {
-        indexer::rebuild_index(&pool, &es, entity).await?;
+        indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
     }
 
     tracing::info!("All done ✓");

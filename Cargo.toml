@@ -34,6 +34,18 @@ path = "tests/test_watch_cdc.rs"
 name = "test_graphql"
 path = "tests/test_graphql.rs"
 
+[[test]]
+name = "test_relations"
+path = "tests/test_relations.rs"
+
+[[test]]
+name = "test_search"
+path = "tests/test_search.rs"
+
+[[test]]
+name = "test_search_text"
+path = "tests/test_search_text.rs"
+
 [dependencies]
 # CLI
 clap        = { version = "4", features = ["derive", "env"] }

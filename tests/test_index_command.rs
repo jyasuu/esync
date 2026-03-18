@@ -6,6 +6,7 @@
 /// All tests are serialised with #[serial] to avoid:
 ///  - parallel reseed() races on the fixed-UUID seed rows
 ///  - two tests recreating the same ES index simultaneously
+
 mod common;
 use common::*;
 
@@ -14,9 +15,9 @@ use esync::{config::Config, db, elastic::EsClient, indexer};
 use serial_test::serial;
 
 async fn setup() -> Result<(sqlx::PgPool, EsClient, Config)> {
-    let cfg = Config::load(CFG_PATH)?;
+    let cfg  = Config::load(CFG_PATH)?;
     let pool = db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?;
-    let es = EsClient::new(&cfg.elasticsearch)?;
+    let es   = EsClient::new(&cfg.elasticsearch)?;
     reseed(&pool).await?;
     // Always wipe the test indices before each test for a clean slate
     es_delete_index("test_products").await?;
@@ -32,7 +33,7 @@ async fn test_rebuild_indexes_all_rows() -> Result<()> {
     let (pool, es, cfg) = setup().await?;
     let entity = cfg.entities.iter().find(|e| e.name == "Product").unwrap();
 
-    indexer::rebuild_index(&pool, &es, entity).await?;
+    indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
     es_refresh(&entity.index).await?;
 
     let hits = es_all(&entity.index).await?;
@@ -46,12 +47,12 @@ async fn test_rebuild_document_fields_match_db() -> Result<()> {
     let (pool, es, cfg) = setup().await?;
     let entity = cfg.entities.iter().find(|e| e.name == "Product").unwrap();
 
-    indexer::rebuild_index(&pool, &es, entity).await?;
+    indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
 
     let doc = es.get_document(&entity.index, PRODUCT_1).await?;
     let src = &doc["_source"];
-    assert_eq!(src["name"], "Alpha Widget");
-    assert_eq!(src["stock"], 100);
+    assert_eq!(src["name"],   "Alpha Widget");
+    assert_eq!(src["stock"],  100);
     assert_eq!(src["active"], true);
     assert!(!src["price"].is_null(), "price should not be null");
     Ok(())
@@ -63,15 +64,14 @@ async fn test_rebuild_replaces_stale_data() -> Result<()> {
     let (pool, es, cfg) = setup().await?;
     let entity = cfg.entities.iter().find(|e| e.name == "Product").unwrap();
 
-    indexer::rebuild_index(&pool, &es, entity).await?;
+    indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
 
     // Mutate in DB then rebuild — ES must reflect the new value
     sqlx::query("UPDATE products SET name = 'Modified Name' WHERE id = $1")
         .bind(uuid::Uuid::parse_str(PRODUCT_1)?)
-        .execute(&pool)
-        .await?;
+        .execute(&pool).await?;
 
-    indexer::rebuild_index(&pool, &es, entity).await?;
+    indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
     es_refresh(&entity.index).await?;
 
     let doc = es.get_document(&entity.index, PRODUCT_1).await?;
@@ -91,10 +91,9 @@ async fn test_rebuild_respects_sql_filter() -> Result<()> {
     // Soft-delete ORDER_1 before indexing
     sqlx::query("UPDATE orders SET deleted_at = NOW() WHERE id = $1")
         .bind(uuid::Uuid::parse_str(ORDER_1)?)
-        .execute(&pool)
-        .await?;
+        .execute(&pool).await?;
 
-    indexer::rebuild_index(&pool, &es, entity).await?;
+    indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
     es_refresh(&entity.index).await?;
 
     let hits = es_all(&entity.index).await?;
@@ -117,19 +116,14 @@ async fn test_rebuild_multi_batch_indexes_all() -> Result<()> {
         sqlx::query("INSERT INTO products (name, price) VALUES ($1, $2)")
             .bind(format!("Batch Product {i}"))
             .bind(f64::from(i) * 1.5)
-            .execute(&pool)
-            .await?;
+            .execute(&pool).await?;
     }
 
-    indexer::rebuild_index(&pool, &es, entity).await?;
+    indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
     es_refresh(&entity.index).await?;
 
     let hits = es_all(&entity.index).await?;
-    assert_eq!(
-        hits.len(),
-        20,
-        "All 20 products across 2 batches should be indexed"
-    );
+    assert_eq!(hits.len(), 20, "All 20 products across 2 batches should be indexed");
 
     reseed(&pool).await?;
     Ok(())
@@ -141,11 +135,11 @@ async fn test_rebuild_all_entities_independently() -> Result<()> {
     let (pool, es, cfg) = setup().await?;
 
     for entity in &cfg.entities {
-        indexer::rebuild_index(&pool, &es, entity).await?;
+        indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
         es_refresh(&entity.index).await?;
     }
 
     assert_eq!(es_all("test_products").await?.len(), 5);
-    assert_eq!(es_all("test_orders").await?.len(), 3);
+    assert_eq!(es_all("test_orders").await?.len(),   3);
     Ok(())
 }

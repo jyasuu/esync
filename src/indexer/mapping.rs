@@ -8,18 +8,18 @@ pub fn derive_es_type(col: &ColumnConfig) -> EsFieldType {
         return explicit.clone();
     }
     match col.pg_type {
-        PgType::Uuid => EsFieldType::Keyword,
-        PgType::Text | PgType::Varchar => EsFieldType::Text,
-        PgType::Int2 | PgType::Int4 => EsFieldType::Integer,
-        PgType::Int8 => EsFieldType::Long,
-        PgType::Float4 => EsFieldType::Float,
-        PgType::Float8 => EsFieldType::Double,
-        PgType::Numeric => EsFieldType::ScaledFloat,
-        PgType::Bool => EsFieldType::Boolean,
+        PgType::Uuid                           => EsFieldType::Keyword,
+        PgType::Text | PgType::Varchar         => EsFieldType::Text,
+        PgType::Int2 | PgType::Int4            => EsFieldType::Integer,
+        PgType::Int8                           => EsFieldType::Long,
+        PgType::Float4                         => EsFieldType::Float,
+        PgType::Float8                         => EsFieldType::Double,
+        PgType::Numeric                        => EsFieldType::ScaledFloat,
+        PgType::Bool                           => EsFieldType::Boolean,
         PgType::Timestamptz | PgType::Timestamp => EsFieldType::Date,
-        PgType::Date => EsFieldType::Date,
-        PgType::Jsonb | PgType::Json => EsFieldType::Object,
-        PgType::Other => EsFieldType::Keyword,
+        PgType::Date                           => EsFieldType::Date,
+        PgType::Jsonb | PgType::Json           => EsFieldType::Object,
+        PgType::Other                          => EsFieldType::Keyword,
     }
 }
 
@@ -69,16 +69,26 @@ fn build_field_def(es_type: &EsFieldType, _col: &ColumnConfig) -> Value {
 }
 
 /// Build a full index create body including settings + mappings.
+/// If `search_text_field` is Some, adds a `text` field for the denormalized search string.
 pub fn build_index_body(
-    columns: &[ColumnConfig],
-    number_of_shards: u32,
+    columns:           &[ColumnConfig],
+    number_of_shards:  u32,
     number_of_replicas: u32,
+    search_text_field: Option<&str>,
 ) -> Value {
+    let mut mappings = build_mappings(columns);
+    // Inject the search_text field as a dedicated `text` mapping
+    if let Some(field) = search_text_field {
+        mappings["properties"][field] = json!({
+            "type": "text",
+            "analyzer": "standard"
+        });
+    }
     json!({
         "settings": {
             "number_of_shards": number_of_shards,
             "number_of_replicas": number_of_replicas
         },
-        "mappings": build_mappings(columns)
+        "mappings": mappings
     })
 }

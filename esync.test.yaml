@@ -7,16 +7,113 @@ elasticsearch:
 
 graphql:
   host: "127.0.0.1"
-  port: 4001          # different port from dev to avoid conflicts
+  port: 4001
   playground: false
 
 entities:
+  - name: Customer
+    table: customers
+    index: test_customers
+    id_column: id
+    search_text:
+      field: search_text
+      separator: " "
+      sources:
+        - column: name
+        - column: email
+        - relation: tags
+          columns: [label]
+        - relation: orders
+          columns: [status]
+    search:
+      enabled: true
+      fields:
+        - field: "name^2"
+        - field: email
+        - field: search_text
+      highlight:
+        - name
+      enrich:
+        - orders
+        - tags
+      live_columns:
+        - email
+      cross_index:
+        - Product
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: name
+        pg_type: TEXT
+      - name: email
+        pg_type: TEXT
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+    relations:
+      - field: orders
+        kind: has_many
+        target: Order
+        local_col: id
+        foreign_col: customer_id
+        order_by: placed_at DESC
+        limit: 50
+        filter: "deleted_at IS NULL"
+      - field: tags
+        kind: many_to_many
+        target: Tag
+        join_table: customer_tags
+        local_col: customer_id
+        foreign_col: tag_id
+        target_id_col: id
+
+  - name: Order
+    table: orders
+    index: test_orders
+    id_column: id
+    filter: "deleted_at IS NULL"
+    batch_size: 10
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: customer_id
+        pg_type: UUID
+      - name: status
+        pg_type: TEXT
+      - name: total
+        pg_type: NUMERIC
+      - name: placed_at
+        pg_type: TIMESTAMPTZ
+      - name: metadata
+        pg_type: JSONB
+    relations:
+      - field: customer
+        kind: belongs_to
+        target: Customer
+        local_col: customer_id
+        foreign_col: id
+
   - name: Product
     table: products
     index: test_products
     id_column: id
     notify_channel: test_products_changes
-    batch_size: 10      # small batch to exercise pagination in tests
+    batch_size: 10
+    search_text:
+      field: search_text
+      separator: " "
+      sources:
+        - column: name
+        - column: description
+    search:
+      enabled: true
+      fields:
+        - field: "name^3"
+        - field: description
+        - field: search_text
+      highlight:
+        - name
+      live_columns:
+        - stock
     columns:
       - name: id
         pg_type: UUID
@@ -36,23 +133,12 @@ entities:
       - name: updated_at
         pg_type: TIMESTAMPTZ
 
-  - name: Order
-    table: orders
-    index: test_orders
+  - name: Tag
+    table: tags
+    index: test_tags
     id_column: id
-    filter: "deleted_at IS NULL"
-    batch_size: 10
     columns:
       - name: id
         pg_type: UUID
-      - name: customer_id
-        pg_type: UUID
-        es_type: keyword
-      - name: status
+      - name: label
         pg_type: TEXT
-      - name: total
-        pg_type: NUMERIC
-      - name: placed_at
-        pg_type: TIMESTAMPTZ
-      - name: metadata
-        pg_type: JSONB

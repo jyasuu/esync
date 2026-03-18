@@ -2,87 +2,66 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs};
 
-// ────────────────────────────────────────────────────────────────────────────
-// Top-level config
-// ────────────────────────────────────────────────────────────────────────────
+// ── Top-level config ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
-    pub postgres: PostgresConfig,
+    pub postgres:      PostgresConfig,
     pub elasticsearch: ElasticsearchConfig,
-    pub graphql: GraphQLConfig,
+    pub graphql:       GraphQLConfig,
 
-    /// One entry per entity you want to expose / index
     #[serde(default)]
     pub entities: Vec<EntityConfig>,
 }
 
 impl Config {
     pub fn load(path: &str) -> Result<Self> {
-        let raw =
-            fs::read_to_string(path).with_context(|| format!("Cannot read config file: {path}"))?;
-        let cfg: Config =
-            serde_yaml::from_str(&raw).with_context(|| format!("Invalid YAML in {path}"))?;
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("Cannot read config file: {path}"))?;
+        let cfg: Config = serde_yaml::from_str(&raw)
+            .with_context(|| format!("Invalid YAML in {path}"))?;
         Ok(cfg)
+    }
+
+    /// Look up an entity by name.
+    pub fn entity(&self, name: &str) -> Option<&EntityConfig> {
+        self.entities.iter().find(|e| e.name == name)
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Sub-configs
-// ────────────────────────────────────────────────────────────────────────────
+// ── Sub-configs ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PostgresConfig {
     pub url: String,
-    /// Max connections in the pool
     #[serde(default = "default_pool_size")]
     pub pool_size: u32,
 }
-
-fn default_pool_size() -> u32 {
-    10
-}
+fn default_pool_size() -> u32 { 10 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ElasticsearchConfig {
-    pub url: String,
-    #[serde(default)]
-    pub username: Option<String>,
-    #[serde(default)]
-    pub password: Option<String>,
-    /// Cloud ID (alternative to url)
-    #[serde(default)]
-    pub cloud_id: Option<String>,
+    pub url:      String,
+    #[serde(default)] pub username: Option<String>,
+    #[serde(default)] pub password: Option<String>,
+    #[serde(default)] pub cloud_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GraphQLConfig {
-    #[serde(default = "default_host")]
-    pub host: String,
-    #[serde(default = "default_port")]
-    pub port: u16,
-    /// Expose the GraphiQL playground
-    #[serde(default = "bool_true")]
-    pub playground: bool,
+    #[serde(default = "default_host")]    pub host:       String,
+    #[serde(default = "default_port")]    pub port:       u16,
+    #[serde(default = "bool_true")]       pub playground: bool,
 }
+fn default_host() -> String { "0.0.0.0".into() }
+fn default_port() -> u16    { 4000 }
+fn bool_true()    -> bool   { true }
 
-fn default_host() -> String {
-    "0.0.0.0".into()
-}
-fn default_port() -> u16 {
-    4000
-}
-fn bool_true() -> bool {
-    true
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Entity config (the core mapping DSL)
-// ────────────────────────────────────────────────────────────────────────────
+// ── Entity config ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EntityConfig {
-    /// Human name, also used as GraphQL type name
+    /// GraphQL type name (CamelCase recommended)
     pub name: String,
     /// Source Postgres table
     pub table: String,
@@ -91,25 +70,31 @@ pub struct EntityConfig {
     /// Column used as the ES document `_id`
     #[serde(default = "default_id_col")]
     pub id_column: String,
-    /// Postgres channel for LISTEN/NOTIFY CDC  (defaults to table name)
+    /// Postgres LISTEN/NOTIFY channel for CDC (defaults to table name)
     #[serde(default)]
     pub notify_channel: Option<String>,
-    /// Column definitions drive both GQL schema + ES mapping
+    /// Column definitions — drive both GQL schema and ES mapping
     pub columns: Vec<ColumnConfig>,
-    /// Optional SQL WHERE clause fragment for partial sync
+    /// Relationships to other entities (no FK required)
+    #[serde(default)]
+    pub relations: Vec<RelationConfig>,
+    /// Optional SQL WHERE fragment applied to all operations
     #[serde(default)]
     pub filter: Option<String>,
-    /// Batch size when bulk-indexing
+    /// Rows per bulk-index request
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
+    /// Computed denormalized text field built from own columns + relations,
+    /// stored in ES for full-text search.
+    #[serde(default)]
+    pub search_text: Option<SearchTextConfig>,
+    /// ES-backed full-text search configuration
+    #[serde(default)]
+    pub search: SearchConfig,
 }
 
-fn default_id_col() -> String {
-    "id".into()
-}
-fn default_batch_size() -> usize {
-    500
-}
+fn default_id_col()     -> String { "id".into() }
+fn default_batch_size() -> usize  { 500 }
 
 impl EntityConfig {
     pub fn notify_channel(&self) -> &str {
@@ -117,69 +102,231 @@ impl EntityConfig {
     }
 }
 
+// ── Relation config ───────────────────────────────────────────────────────
+
+/// Describes how one entity relates to another.
+///
+/// # Examples (YAML)
+///
+/// ## belongs_to  (many-to-one — returns a single nullable object)
+/// ```yaml
+/// relations:
+///   - field: customer          # GQL field name on this type
+///     kind: belongs_to
+///     target: Customer         # entity name in `entities:`
+///     local_col: customer_id   # column on THIS table
+///     foreign_col: id          # column on the TARGET table (default: id)
+/// ```
+///
+/// ## has_many  (one-to-many — returns a list)
+/// ```yaml
+/// relations:
+///   - field: orders
+///     kind: has_many
+///     target: Order
+///     local_col: id
+///     foreign_col: customer_id
+///     limit: 50                # optional cap (default: 100)
+///     order_by: placed_at DESC # optional ORDER BY clause
+///     filter: status = 'active' # optional extra WHERE fragment
+/// ```
+///
+/// ## many_to_many  (join table — returns a list)
+/// ```yaml
+/// relations:
+///   - field: tags
+///     kind: many_to_many
+///     target: Tag
+///     join_table: product_tags
+///     local_col: product_id      # join_table column pointing to THIS entity
+///     foreign_col: tag_id        # join_table column pointing to TARGET entity
+///     target_id_col: id          # pk on target table (default: id)
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ColumnConfig {
-    pub name: String,
-    /// Postgres type (used to derive ES mapping if es_type is absent)
-    pub pg_type: PgType,
-    /// Override the derived ES field type
+pub struct RelationConfig {
+    /// The GraphQL field name this relation is exposed under
+    pub field: String,
+    /// Relationship cardinality
+    pub kind: RelationKind,
+    /// Name of the target EntityConfig
+    pub target: String,
+    /// Column on the "local" side (this entity's table, or join table)
+    pub local_col: String,
+    /// Column on the "foreign" side (target entity's table, or join table)
+    #[serde(default = "default_id_col")]
+    pub foreign_col: String,
+
+    // ── many_to_many extras ───────────────────────────────────────────────
+    /// Join table name (many_to_many only)
     #[serde(default)]
-    pub es_type: Option<EsFieldType>,
-    /// Include a .keyword sub-field for text columns
-    #[serde(default = "bool_true")]
-    pub keyword_subfield: bool,
-    /// Expose in GraphQL schema
-    #[serde(default = "bool_true")]
-    pub graphql: bool,
-    /// Index this field in ES
-    #[serde(default = "bool_true")]
-    pub indexed: bool,
-    /// Custom ES field properties (merged verbatim)
+    pub join_table: Option<String>,
+    /// PK column on the target table (many_to_many, default "id")
+    #[serde(default = "default_id_col")]
+    pub target_id_col: String,
+    /// Actual Postgres table name for the target entity.
+    /// If unset, the `target` entity name is used as the table name.
+    /// Set this when the entity name differs from the table name.
     #[serde(default)]
-    pub es_extra: HashMap<String, serde_json::Value>,
+    pub target_table: Option<String>,
+
+    // ── has_many / many_to_many list controls ────────────────────────────
+    /// Max rows returned (default 100)
+    #[serde(default = "default_relation_limit")]
+    pub limit: i64,
+    /// Optional ORDER BY clause fragment, e.g. "placed_at DESC"
+    #[serde(default)]
+    pub order_by: Option<String>,
+    /// Optional extra WHERE fragment applied to the related rows
+    #[serde(default)]
+    pub filter: Option<String>,
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Type enums
-// ────────────────────────────────────────────────────────────────────────────
+fn default_relation_limit() -> i64 { 100 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationKind {
+    /// Many rows on this side → one row on the other (e.g. order.customer)
+    BelongsTo,
+    /// One row on this side → many rows on the other (e.g. customer.orders)
+    HasMany,
+    /// Many-to-many via a join table
+    ManyToMany,
+}
+
+
+
+// ── search_text denormalization config ───────────────────────────────────
+
+/// Defines a computed `search_text` field that gets built during indexing
+/// by joining data from the entity's own columns and its relations.
+/// The resulting string is stored in Elasticsearch for full-text search.
+///
+/// # Example (YAML)
+/// ```yaml
+/// search_text:
+///   field: search_text        # ES field name (default: "search_text")
+///   separator: " "            # join separator (default: " ")
+///   sources:
+///     - column: name          # own column
+///     - column: description
+///     - relation: category    # belongs_to → pulls category.name, category.slug
+///       columns: [name, slug]
+///     - relation: tags        # has_many / many_to_many → all tag.label values joined
+///       columns: [label]
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SearchTextConfig {
+    /// Name of the ES field to store the concatenated text (default: "search_text")
+    #[serde(default = "default_search_text_field")]
+    pub field: String,
+
+    /// String used to join all parts together (default: single space)
+    #[serde(default = "default_separator")]
+    pub separator: String,
+
+    /// Ordered list of sources to include in the text
+    #[serde(default)]
+    pub sources: Vec<SearchTextSource>,
+}
+
+fn default_search_text_field() -> String { "search_text".into() }
+fn default_separator()          -> String { " ".into() }
+
+/// One source contributing text to the `search_text` field.
+/// Exactly one of `column` or `relation` must be set.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SearchTextSource {
+    /// Name of a column on this entity's own table
+    #[serde(default)]
+    pub column: Option<String>,
+
+    /// Name of a relation defined in `relations:` — pulls text from the related table
+    #[serde(default)]
+    pub relation: Option<String>,
+
+    /// For relation sources: which columns on the related table to include
+    #[serde(default)]
+    pub columns: Vec<String>,
+}
+
+// ── Search config ─────────────────────────────────────────────────────────
+
+/// Opt-in ES-backed search for an entity.
+/// Adds a `search_<entity>` query to the GraphQL schema.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SearchConfig {
+    /// Whether to expose a `search_*` query for this entity
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// ES fields to search across, with optional boosts  (e.g. "name^3")
+    #[serde(default)]
+    pub fields: Vec<SearchField>,
+
+    /// ES field names to include highlighted snippets for
+    #[serde(default)]
+    pub highlight: Vec<String>,
+
+    /// After ES search, enrich hits with these relation names (defined in `relations:`)
+    #[serde(default)]
+    pub enrich: Vec<String>,
+
+    /// Columns to re-fetch live from Postgres (always fresh, bypasses ES _source staleness)
+    #[serde(default)]
+    pub live_columns: Vec<String>,
+
+    /// Extra ES index names to search together with this entity's index (cross-index search)
+    #[serde(default)]
+    pub cross_index: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SearchField {
+    /// ES field path, with optional boost suffix  e.g. "name^3"
+    pub field: String,
+}
+
+impl SearchField {
+    /// Returns (field_path, boost_factor)
+    pub fn parse(&self) -> (&str, Option<f32>) {
+        if let Some((name, boost)) = self.field.split_once('^') {
+            let b: Option<f32> = boost.parse().ok();
+            (name, b)
+        } else {
+            (self.field.as_str(), None)
+        }
+    }
+}
+
+// ── Column config ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ColumnConfig {
+    pub name:    String,
+    pub pg_type: PgType,
+    #[serde(default)] pub es_type:         Option<EsFieldType>,
+    #[serde(default = "bool_true")] pub keyword_subfield: bool,
+    #[serde(default = "bool_true")] pub graphql:          bool,
+    #[serde(default = "bool_true")] pub indexed:          bool,
+    #[serde(default)] pub es_extra: HashMap<String, serde_json::Value>,
+}
+
+// ── Type enums ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PgType {
-    Uuid,
-    Text,
-    Varchar,
-    Int2,
-    Int4,
-    Int8,
-    Float4,
-    Float8,
-    Numeric,
-    Bool,
-    Timestamptz,
-    Timestamp,
-    Date,
-    Jsonb,
-    Json,
-    #[serde(other)]
-    Other,
+    Uuid, Text, Varchar, Int2, Int4, Int8, Float4, Float8,
+    Numeric, Bool, Timestamptz, Timestamp, Date, Jsonb, Json,
+    #[serde(other)] Other,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum EsFieldType {
-    Keyword,
-    Text,
-    Integer,
-    Long,
-    Float,
-    Double,
-    ScaledFloat,
-    Boolean,
-    Date,
-    Object,
-    Nested,
-    Ip,
+    Keyword, Text, Integer, Long, Float, Double, ScaledFloat,
+    Boolean, Date, Object, Nested, Ip,
 }
 
 impl std::fmt::Display for EsFieldType {

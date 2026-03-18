@@ -1,4 +1,4 @@
-use crate::{config::Config, db, graphql};
+use crate::{config::Config, db, elastic::EsClient, graphql};
 use anyhow::Result;
 use async_graphql::http::GraphiQLSource;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
@@ -28,20 +28,22 @@ type DynSchema = async_graphql::dynamic::Schema;
 
 #[derive(Clone)]
 struct AppState {
-    schema: Arc<DynSchema>,
+    schema:     Arc<DynSchema>,
     playground: bool,
 }
 
 pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
     let pool = Arc::new(db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?);
-    let schema = Arc::new(graphql::build_schema(&cfg, pool)?);
+    // Only connect to ES if at least one entity has search.enabled
+    let es = if cfg.entities.iter().any(|e| e.search.enabled) {
+        Arc::new(EsClient::new(&cfg.elasticsearch)?)
+    } else {
+        Arc::new(EsClient::new_noop())
+    };
+    let schema = Arc::new(graphql::build_schema(&cfg, pool, es)?);
 
-    let host = args
-        .host
-        .as_deref()
-        .unwrap_or(&cfg.graphql.host)
-        .to_string();
-    let port = args.port.unwrap_or(cfg.graphql.port);
+    let host       = args.host.as_deref().unwrap_or(&cfg.graphql.host).to_string();
+    let port       = args.port.unwrap_or(cfg.graphql.port);
     let playground = cfg.graphql.playground && !args.no_playground;
 
     let state = AppState { schema, playground };
@@ -49,7 +51,7 @@ pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
         .route("/graphql", get(playground_handler))
-        .route("/healthz", get(health_handler))
+        .route("/healthz",  get(health_handler))
         .with_state(state)
         .layer(tower_http::cors::CorsLayer::permissive());
 
@@ -64,13 +66,20 @@ pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
     Ok(())
 }
 
-async fn graphql_handler(State(state): State<AppState>, req: GraphQLRequest) -> GraphQLResponse {
+async fn graphql_handler(
+    State(state): State<AppState>,
+    req: GraphQLRequest,
+) -> GraphQLResponse {
     state.schema.execute(req.into_inner()).await.into()
 }
 
 async fn playground_handler(State(state): State<AppState>) -> impl IntoResponse {
     if state.playground {
-        Html(GraphiQLSource::build().endpoint("/graphql").finish()).into_response()
+        Html(
+            GraphiQLSource::build()
+                .endpoint("/graphql")
+                .finish(),
+        ).into_response()
     } else {
         axum::http::StatusCode::NOT_FOUND.into_response()
     }

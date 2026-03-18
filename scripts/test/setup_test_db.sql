@@ -104,6 +104,41 @@ BEGIN
         total      = EXCLUDED.total,
         deleted_at = NULL,
         metadata   = EXCLUDED.metadata;
+
+    -- Reset customer data
+    DELETE FROM customer_tags;
+    DELETE FROM customers WHERE id NOT IN (
+        'cccccccc-0000-0000-0000-000000000001',
+        'cccccccc-0000-0000-0000-000000000002'
+    );
+    INSERT INTO customers (id, name, email) VALUES
+        ('cccccccc-0000-0000-0000-000000000001', 'Alice', 'alice@example.com'),
+        ('cccccccc-0000-0000-0000-000000000002', 'Bob',   'bob@example.com')
+    ON CONFLICT (id) DO UPDATE SET
+        name  = EXCLUDED.name,
+        email = EXCLUDED.email;
+
+    -- Reset tag data
+    DELETE FROM tags WHERE id NOT IN (
+        'eeeeeeee-0000-0000-0000-000000000001',
+        'eeeeeeee-0000-0000-0000-000000000002'
+    );
+    INSERT INTO tags (id, label) VALUES
+        ('eeeeeeee-0000-0000-0000-000000000001', 'vip'),
+        ('eeeeeeee-0000-0000-0000-000000000002', 'wholesale')
+    ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label;
+
+    INSERT INTO customer_tags (customer_id, tag_id) VALUES
+        ('cccccccc-0000-0000-0000-000000000001', 'eeeeeeee-0000-0000-0000-000000000001'),
+        ('cccccccc-0000-0000-0000-000000000001', 'eeeeeeee-0000-0000-0000-000000000002')
+    ON CONFLICT DO NOTHING;
+
+    -- Link orders to Alice
+    UPDATE orders SET customer_id = 'cccccccc-0000-0000-0000-000000000001'
+    WHERE id IN (
+        '10000000-0000-0000-0000-000000000001',
+        '10000000-0000-0000-0000-000000000002'
+    );
 END;
 $$ LANGUAGE plpgsql;
 
@@ -118,3 +153,46 @@ BEGIN
     RAISE NOTICE 'Test DB setup complete ✓';
 END;
 $$;
+
+-- ── Relation support tables ───────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS customers (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       TEXT NOT NULL,
+    email      TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    label TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS customer_tags (
+    customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    tag_id      UUID NOT NULL REFERENCES tags(id)      ON DELETE CASCADE,
+    PRIMARY KEY (customer_id, tag_id)
+);
+
+-- Seed relation data
+INSERT INTO customers (id, name, email) VALUES
+    ('cccccccc-0000-0000-0000-000000000001', 'Alice', 'alice@example.com'),
+    ('cccccccc-0000-0000-0000-000000000002', 'Bob',   'bob@example.com')
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email;
+
+INSERT INTO tags (id, label) VALUES
+    ('eeeeeeee-0000-0000-0000-000000000001', 'vip'),
+    ('eeeeeeee-0000-0000-0000-000000000002', 'wholesale')
+ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label;
+
+INSERT INTO customer_tags (customer_id, tag_id) VALUES
+    ('cccccccc-0000-0000-0000-000000000001', 'eeeeeeee-0000-0000-0000-000000000001'),
+    ('cccccccc-0000-0000-0000-000000000001', 'eeeeeeee-0000-0000-0000-000000000002')
+ON CONFLICT DO NOTHING;
+
+-- Link existing orders to Alice
+UPDATE orders SET customer_id = 'cccccccc-0000-0000-0000-000000000001'
+WHERE id IN (
+    '10000000-0000-0000-0000-000000000001',
+    '10000000-0000-0000-0000-000000000002'
+);

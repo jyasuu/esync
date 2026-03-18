@@ -4,8 +4,6 @@ postgres:
 
 elasticsearch:
   url: "http://localhost:9200"
-  # username: elastic
-  # password: changeme
 
 graphql:
   host: "0.0.0.0"
@@ -13,12 +11,82 @@ graphql:
   playground: true
 
 entities:
+  - name: Customer
+    table: customers
+    index: customers
+    id_column: id
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: name
+        pg_type: TEXT
+      - name: email
+        pg_type: TEXT
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+    relations:
+      # One customer has many orders
+      - field: orders
+        kind: has_many
+        target: Order
+        local_col: id
+        foreign_col: customer_id
+        order_by: placed_at DESC
+        limit: 50
+        filter: "deleted_at IS NULL"
+      # Many-to-many: customer ↔ tag via customer_tags join table
+      - field: tags
+        kind: many_to_many
+        target: Tag
+        join_table: customer_tags
+        local_col: customer_id
+        foreign_col: tag_id
+        target_id_col: id
+
+  - name: Order
+    table: orders
+    index: orders
+    id_column: id
+    filter: "deleted_at IS NULL"
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: customer_id
+        pg_type: UUID
+      - name: status
+        pg_type: TEXT
+      - name: total
+        pg_type: NUMERIC
+      - name: placed_at
+        pg_type: TIMESTAMPTZ
+      - name: metadata
+        pg_type: JSONB
+    relations:
+      # Each order belongs to one customer
+      - field: customer
+        kind: belongs_to
+        target: Customer
+        local_col: customer_id
+        foreign_col: id
+
   - name: Product
     table: products
     index: products
     id_column: id
-    notify_channel: products_changes   # SET via Postgres trigger
-    batch_size: 500
+
+    # Denormalized full-text field: joins own columns + related table values
+    # into a single ES `text` field. No GraphQL access to ES required.
+    search_text:
+      field: search_text        # ES field name
+      separator: " "
+      sources:
+        - column: name          # own columns
+        - column: description
+        - relation: customer    # belongs_to: pulls customer.name
+          columns: [name, email]
+        - relation: tags        # many_to_many: pulls all tag.label values
+          columns: [label]
+
     columns:
       - name: id
         pg_type: UUID
@@ -38,22 +106,12 @@ entities:
       - name: updated_at
         pg_type: TIMESTAMPTZ
 
-  - name: Order
-    table: orders
-    index: orders
+  - name: Tag
+    table: tags
+    index: tags
     id_column: id
-    filter: "deleted_at IS NULL"
     columns:
       - name: id
         pg_type: UUID
-      - name: customer_id
-        pg_type: UUID
-        es_type: keyword
-      - name: status
+      - name: label
         pg_type: TEXT
-      - name: total
-        pg_type: NUMERIC
-      - name: placed_at
-        pg_type: TIMESTAMPTZ
-      - name: metadata
-        pg_type: JSONB
