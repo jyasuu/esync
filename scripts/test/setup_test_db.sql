@@ -87,7 +87,6 @@ BEGIN
         price       = EXCLUDED.price,
         stock       = EXCLUDED.stock,
         active      = EXCLUDED.active,
-        deleted_at  = NULL,
         updated_at  = EXCLUDED.updated_at;
 
     INSERT INTO orders (id, customer_id, status, total, placed_at, deleted_at, metadata) VALUES
