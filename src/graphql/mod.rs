@@ -27,13 +27,15 @@ pub fn build_schema(cfg: &Config, pool: Arc<PgPool>) -> Result<Schema> {
             obj = obj.field(Field::new(col_name.clone(), gql_type, move |ctx| {
                 let name = col_name.clone();
                 FieldFuture::new(async move {
-                    let val = ctx
-                        .parent_value
-                        .as_value()
-                        .and_then(|v| v.as_object())
-                        .and_then(|o| o.get(name.as_str()))
-                        .cloned()
-                        .unwrap_or(GqlValue::Null);
+                    // async-graphql v7: Value has no as_object() method;
+                    // pattern-match on the Object variant directly.
+                    let val = match ctx.parent_value.as_value() {
+                        Some(GqlValue::Object(map)) => map
+                            .get(name.as_str())
+                            .cloned()
+                            .unwrap_or(GqlValue::Null),
+                        _ => GqlValue::Null,
+                    };
                     Ok(Some(val))
                 })
             }));
@@ -196,7 +198,9 @@ fn json_to_gql(v: serde_json::Value) -> GqlValue {
         serde_json::Value::String(s)   => GqlValue::String(s),
         serde_json::Value::Array(arr)  => GqlValue::List(arr.into_iter().map(json_to_gql).collect()),
         serde_json::Value::Object(obj) => GqlValue::Object(
-            obj.into_iter().map(|(k, v)| (Name::new(k), json_to_gql(v))).collect()
+            obj.into_iter()
+               .map(|(k, v)| (Name::new(k), json_to_gql(v)))
+               .collect::<indexmap::IndexMap<Name, GqlValue>>()
         ),
     }
 }
