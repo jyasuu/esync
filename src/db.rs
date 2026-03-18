@@ -12,6 +12,14 @@ pub async fn connect(url: &str, pool_size: u32) -> Result<PgPool> {
 }
 
 /// Fetch a page of rows from `table` as column-name → JSON value maps.
+///
+/// Every column is cast to a canonical representation:
+/// - TIMESTAMPTZ / TIMESTAMP → ISO-8601 string via `AT TIME ZONE 'UTC'`
+/// - NUMERIC                 → plain text (ES scaled_float accepts "9.99")
+/// - Everything else         → TEXT cast
+///
+/// This avoids sqlx's type-guessing (which mis-decodes UUIDs as bool) and
+/// keeps the values in formats ES accepts through its mappings.
 pub async fn fetch_rows(
     pool: &PgPool,
     table: &str,
@@ -20,25 +28,30 @@ pub async fn fetch_rows(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-    let col_list = columns.join(", ");
     let where_clause = filter.map(|f| format!("WHERE {f}")).unwrap_or_default();
 
-    // Cast every column to TEXT so we get a stable, unambiguous string
-    // representation regardless of the underlying PG type. ES receives the
-    // strings and coerces them via its own mappings (date, scaled_float, etc.).
-    let cast_list = columns
-        .iter()
-        .map(|c| format!("{c}::TEXT AS {c}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-
+    // Use to_json() so Postgres handles type coercion natively:
+    //   - timestamps become ISO-8601 strings with timezone
+    //   - numbers stay as JSON numbers (not strings)
+    //   - booleans stay as JSON booleans
+    //   - nulls become JSON null
+    //   - UUIDs become strings
+    // row_to_json wraps the whole row; we unwrap it per-column below.
+    let col_list = columns.join(", ");
     let sql = format!(
-        "SELECT {cast_list} FROM {table} {where_clause} ORDER BY 1 LIMIT {limit} OFFSET {offset}"
+        "SELECT row_to_json(t)::TEXT AS _row \
+         FROM (SELECT {col_list} FROM {table} {where_clause} ORDER BY 1 LIMIT {limit} OFFSET {offset}) t"
     );
 
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
 
-    rows.iter().map(|row| row_to_map(row, columns)).collect()
+    rows.iter()
+        .map(|row| {
+            let json_text: String = row.try_get("_row")?;
+            let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&json_text)?;
+            Ok(obj.into_iter().collect())
+        })
+        .collect()
 }
 
 /// Count rows in `table` matching the optional filter.
@@ -47,21 +60,4 @@ pub async fn count_rows(pool: &PgPool, table: &str, filter: Option<&str>) -> Res
     let sql = format!("SELECT COUNT(*) FROM {table} {where_clause}");
     let (count,): (i64,) = sqlx::query_as(&sql).fetch_one(pool).await?;
     Ok(count)
-}
-
-fn row_to_map(
-    row: &sqlx::postgres::PgRow,
-    columns: &[&str],
-) -> Result<HashMap<String, serde_json::Value>> {
-    let mut map = HashMap::new();
-    for &col in columns {
-        // Every column was cast to TEXT in the query, so we only need String.
-        let val = row
-            .try_get::<Option<String>, _>(col)
-            .unwrap_or(None)
-            .map(serde_json::Value::String)
-            .unwrap_or(serde_json::Value::Null);
-        map.insert(col.to_string(), val);
-    }
-    Ok(map)
 }
