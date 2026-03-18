@@ -1,0 +1,19 @@
+{
+  "index_patterns": ["products*", "orders*"],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "index.lifecycle.name": "esync-default-policy",
+      "index.lifecycle.rollover_alias": "products"
+    },
+    "mappings": {
+      "dynamic": "strict"
+    }
+  },
+  "priority": 100,
+  "version": 1,
+  "_meta": {
+    "description": "Default esync index template"
+  }
+}

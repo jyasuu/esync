@@ -1,0 +1,58 @@
+postgres:
+  url: "postgres://esync:esync@localhost:5432/esync_test"
+  pool_size: 5
+
+elasticsearch:
+  url: "http://localhost:9200"
+
+graphql:
+  host: "127.0.0.1"
+  port: 4001          # different port from dev to avoid conflicts
+  playground: false
+
+entities:
+  - name: Product
+    table: products
+    index: test_products
+    id_column: id
+    notify_channel: test_products_changes
+    batch_size: 10      # small batch to exercise pagination in tests
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: name
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: description
+        pg_type: TEXT
+      - name: price
+        pg_type: NUMERIC
+      - name: stock
+        pg_type: INT4
+      - name: active
+        pg_type: BOOL
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+  - name: Order
+    table: orders
+    index: test_orders
+    id_column: id
+    filter: "deleted_at IS NULL"
+    batch_size: 10
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: customer_id
+        pg_type: UUID
+        es_type: keyword
+      - name: status
+        pg_type: TEXT
+      - name: total
+        pg_type: NUMERIC
+      - name: placed_at
+        pg_type: TIMESTAMPTZ
+      - name: metadata
+        pg_type: JSONB

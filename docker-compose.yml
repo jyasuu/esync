@@ -1,0 +1,68 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: esync
+      POSTGRES_PASSWORD: esync
+      POSTGRES_DB: esync
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U esync"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    environment:
+      ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # The esync binary (built image — see Dockerfile)
+  esync-serve:
+    build: .
+    command: ["serve"]
+    environment:
+      ESYNC_CONFIG: /app/esync.yaml
+      ESYNC_LOG: info
+    volumes:
+      - ./esync.yaml:/app/esync.yaml:ro
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    profiles:
+      - full
+
+volumes:
+  pg_data:
+  es_data:

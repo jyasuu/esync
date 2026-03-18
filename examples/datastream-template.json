@@ -1,0 +1,22 @@
+{
+  "index_patterns": ["logs-esync-*"],
+  "data_stream": {},
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "index.lifecycle.name": "esync-default-policy"
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "entity":     { "type": "keyword" },
+        "op":         { "type": "keyword" },
+        "doc_id":     { "type": "keyword" },
+        "latency_ms": { "type": "long" }
+      }
+    }
+  },
+  "priority": 200,
+  "_meta": { "description": "esync CDC audit log datastream" }
+}

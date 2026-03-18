@@ -1,0 +1,59 @@
+postgres:
+  url: "postgres://esync:esync@localhost:5432/esync"
+  pool_size: 10
+
+elasticsearch:
+  url: "http://localhost:9200"
+  # username: elastic
+  # password: changeme
+
+graphql:
+  host: "0.0.0.0"
+  port: 4000
+  playground: true
+
+entities:
+  - name: Product
+    table: products
+    index: products
+    id_column: id
+    notify_channel: products_changes   # SET via Postgres trigger
+    batch_size: 500
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: name
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: description
+        pg_type: TEXT
+      - name: price
+        pg_type: NUMERIC
+      - name: stock
+        pg_type: INT4
+      - name: active
+        pg_type: BOOL
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+  - name: Order
+    table: orders
+    index: orders
+    id_column: id
+    filter: "deleted_at IS NULL"
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: customer_id
+        pg_type: UUID
+        es_type: keyword
+      - name: status
+        pg_type: TEXT
+      - name: total
+        pg_type: NUMERIC
+      - name: placed_at
+        pg_type: TIMESTAMPTZ
+      - name: metadata
+        pg_type: JSONB

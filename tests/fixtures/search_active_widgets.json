@@ -1,0 +1,13 @@
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "name": "widget" } }
+      ],
+      "filter": [
+        { "term": { "active": true } }
+      ]
+    }
+  },
+  "size": 10
+}

@@ -1,0 +1,75 @@
+[package]
+name = "esync"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tool to sync PostgreSQL data to Elasticsearch via GraphQL"
+
+[[bin]]
+name = "esync"
+path = "src/main.rs"
+
+# Expose internals for integration tests
+[lib]
+name = "esync"
+path = "src/lib.rs"
+
+# ── Integration test targets ──────────────────────────────────────────────
+[[test]]
+name = "test_mapping"
+path = "tests/test_mapping.rs"
+
+[[test]]
+name = "test_elastic"
+path = "tests/test_elastic.rs"
+
+[[test]]
+name = "test_index_command"
+path = "tests/test_index_command.rs"
+
+[[test]]
+name = "test_watch_cdc"
+path = "tests/test_watch_cdc.rs"
+
+[[test]]
+name = "test_graphql"
+path = "tests/test_graphql.rs"
+
+[dependencies]
+# CLI
+clap        = { version = "4", features = ["derive", "env"] }
+tokio       = { version = "1", features = ["full"] }
+anyhow      = "1"
+thiserror   = "1"
+
+# Config
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+serde_yaml  = "0.9"
+
+# Database
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono", "json"] }
+
+# GraphQL server
+async-graphql      = { version = "7", features = ["uuid", "chrono", "dynamic-schema"] }
+async-graphql-axum = "7"
+axum          = "0.7"
+tower         = "0.4"
+tower-http    = { version = "0.5", features = ["cors", "trace"] }
+
+# HTTP client — used for the ES client layer
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Utilities
+uuid       = { version = "1", features = ["v4", "serde"] }
+chrono     = { version = "0.4", features = ["serde"] }
+indexmap   = { version = "2", features = ["serde"] }
+tracing    = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+indicatif  = "0.17"
+colored    = "2"
+futures    = "0.3"
+tokio-stream = "0.1"
+bytes      = "1"
+
+[dev-dependencies]
+tokio-test = "0.4"

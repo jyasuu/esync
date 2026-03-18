@@ -1,0 +1,19 @@
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "name": "widget" } }
+      ],
+      "filter": [
+        { "term":  { "active": true } },
+        { "range": { "price": { "gte": 5, "lte": 100 } } }
+      ]
+    }
+  },
+  "sort": [
+    { "price": { "order": "asc" } }
+  ],
+  "from": 0,
+  "size": 20,
+  "_source": ["id", "name", "price", "stock"]
+}

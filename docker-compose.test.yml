@@ -1,0 +1,32 @@
+# docker-compose.test.yml
+# Overrides for the test environment.
+# Use together with docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+
+services:
+  postgres:
+    # Override environment to also create the test DB on first start
+    environment:
+      POSTGRES_USER: esync
+      POSTGRES_PASSWORD: esync
+      POSTGRES_DB: esync           # main dev DB
+      # The test DB (esync_test) is created by the test runner script
+    # Expose on default port — override here if you need a different port
+    ports:
+      - "5432:5432"
+
+  elasticsearch:
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      # Smaller heap for CI / local test runs
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+    ports:
+      - "9200:9200"
+    # No volume mount so each test run starts from a clean ES state
+    # (test indices are explicitly cleaned by the runner script)
+
+  # Kibana is not needed for tests
+  kibana:
+    profiles:
+      - kibana-only   # effectively disables kibana in test profile
