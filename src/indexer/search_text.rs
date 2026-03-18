@@ -22,16 +22,15 @@ use std::collections::HashMap;
 /// `config`  — full app config, used to resolve related entity table names
 pub async fn build(
     own_row: &HashMap<String, serde_json::Value>,
-    pool:    &PgPool,
-    entity:  &EntityConfig,
-    cfg:     &SearchTextConfig,
-    config:  &Config,
+    pool: &PgPool,
+    entity: &EntityConfig,
+    cfg: &SearchTextConfig,
+    config: &Config,
 ) -> Result<String> {
     let mut parts: Vec<String> = Vec::new();
 
     for source in &cfg.sources {
         match (&source.column, &source.relation) {
-
             // ── Own column ────────────────────────────────────────────────
             (Some(col_name), _) => {
                 if let Some(val) = own_row.get(col_name) {
@@ -57,7 +56,8 @@ pub async fn build(
                     None => {
                         tracing::warn!(
                             "search_text source references unknown relation `{rel_name}` \
-                             on entity `{}`", entity.name
+                             on entity `{}`",
+                            entity.name
                         );
                         continue;
                     }
@@ -68,14 +68,21 @@ pub async fn build(
                 // 2. look up entity by name in config → use its .table field
                 // 3. fall back to lowercasing the target name
                 let target_table: String = rel.target_table.clone().unwrap_or_else(|| {
-                    config.entity(&rel.target)
+                    config
+                        .entity(&rel.target)
                         .map(|e| e.table.clone())
                         .unwrap_or_else(|| rel.target.to_lowercase())
                 });
 
                 let texts = fetch_relation_texts(
-                    own_row, pool, entity, rel, &source.columns, &target_table,
-                ).await?;
+                    own_row,
+                    pool,
+                    entity,
+                    rel,
+                    &source.columns,
+                    &target_table,
+                )
+                .await?;
                 parts.extend(texts);
             }
 
@@ -95,17 +102,16 @@ pub async fn build(
 // ── SQL fetchers ──────────────────────────────────────────────────────────
 
 async fn fetch_relation_texts(
-    own_row:      &HashMap<String, serde_json::Value>,
-    pool:         &PgPool,
-    entity:       &EntityConfig,
-    rel:          &RelationConfig,
-    rel_cols:     &[String],
+    own_row: &HashMap<String, serde_json::Value>,
+    pool: &PgPool,
+    entity: &EntityConfig,
+    rel: &RelationConfig,
+    rel_cols: &[String],
     target_table: &str,
 ) -> Result<Vec<String>> {
     let col_list = rel_cols.join(", ");
 
     let rows = match rel.kind {
-
         // Many-to-one: look up the one related row by FK
         RelationKind::BelongsTo => {
             let fk = match own_row.get(&rel.local_col) {
@@ -116,7 +122,8 @@ async fn fetch_relation_texts(
                 "SELECT row_to_json(t)::TEXT AS _row \
                  FROM (SELECT {col_list} FROM {target_table} \
                        WHERE {} = '{}' LIMIT 1) t",
-                rel.foreign_col, fk.replace('\'', "''")
+                rel.foreign_col,
+                fk.replace('\'', "''")
             );
             query_rows(pool, &sql).await?
         }
@@ -127,9 +134,7 @@ async fn fetch_relation_texts(
                 Some(v) if *v != serde_json::Value::Null => value_to_text(v),
                 _ => return Ok(vec![]),
             };
-            let mut filter = format!(
-                "{} = '{}'", rel.foreign_col, pk.replace('\'', "''")
-            );
+            let mut filter = format!("{} = '{}'", rel.foreign_col, pk.replace('\'', "''"));
             if let Some(ref extra) = rel.filter {
                 filter.push_str(&format!(" AND ({extra})"));
             }
@@ -157,7 +162,8 @@ async fn fetch_relation_texts(
                 _ => return Ok(vec![]),
             };
             // Qualify target columns to avoid ambiguity
-            let qualified = rel_cols.iter()
+            let qualified = rel_cols
+                .iter()
                 .map(|c| format!("t.{c}"))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -171,28 +177,27 @@ async fn fetch_relation_texts(
                  ) r",
                 rel.target_id_col,
                 rel.foreign_col,
-                rel.local_col, pk.replace('\'', "''"),
+                rel.local_col,
+                pk.replace('\'', "''"),
                 rel.limit
             );
             query_rows(pool, &sql).await?
         }
     };
 
-    let texts: Vec<String> = rows.iter()
+    let texts: Vec<String> = rows
+        .iter()
         .flat_map(|row| {
-            rel_cols.iter().filter_map(|col| {
-                row.get(col).map(value_to_text).filter(|s| !s.is_empty())
-            })
+            rel_cols
+                .iter()
+                .filter_map(|col| row.get(col).map(value_to_text).filter(|s| !s.is_empty()))
         })
         .collect();
 
     Ok(texts)
 }
 
-async fn query_rows(
-    pool: &PgPool,
-    sql:  &str,
-) -> Result<Vec<HashMap<String, serde_json::Value>>> {
+async fn query_rows(pool: &PgPool, sql: &str) -> Result<Vec<HashMap<String, serde_json::Value>>> {
     let rows = sqlx::query(sql).fetch_all(pool).await?;
     rows.iter()
         .map(|r| {
@@ -206,16 +211,18 @@ async fn query_rows(
 /// Convert any JSON value to a flat text string suitable for search indexing.
 pub fn value_to_text(v: &serde_json::Value) -> String {
     match v {
-        serde_json::Value::Null        => String::new(),
-        serde_json::Value::Bool(b)     => b.to_string(),
-        serde_json::Value::Number(n)   => n.to_string(),
-        serde_json::Value::String(s)   => s.clone(),
-        serde_json::Value::Array(arr)  => arr.iter()
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(arr) => arr
+            .iter()
             .map(value_to_text)
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(" "),
-        serde_json::Value::Object(obj) => obj.values()
+        serde_json::Value::Object(obj) => obj
+            .values()
             .map(value_to_text)
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()

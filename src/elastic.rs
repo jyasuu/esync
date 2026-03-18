@@ -31,7 +31,11 @@ impl EsClient {
             _ => None,
         };
 
-        Ok(Self { http, base: cfg.url.trim_end_matches('/').to_string(), auth })
+        Ok(Self {
+            http,
+            base: cfg.url.trim_end_matches('/').to_string(),
+            auth,
+        })
     }
 
     // ── generic helpers ───────────────────────────────────────────────────
@@ -104,7 +108,11 @@ impl EsClient {
 
     pub async fn put_mapping(&self, index: &str, body: Value) -> Result<Value> {
         let path = format!("{index}/_mapping");
-        let resp = self.req(reqwest::Method::PUT, &path).json(&body).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, &path)
+            .json(&body)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 
@@ -112,7 +120,11 @@ impl EsClient {
 
     pub async fn put_document(&self, index: &str, id: &str, doc: Value) -> Result<Value> {
         let path = format!("{index}/_doc/{id}");
-        let resp = self.req(reqwest::Method::PUT, &path).json(&doc).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, &path)
+            .json(&doc)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 
@@ -131,14 +143,20 @@ impl EsClient {
     /// POST /<index>/_search with arbitrary body
     pub async fn search(&self, index: &str, query: Value) -> Result<Value> {
         let path = format!("{index}/_search");
-        let resp = self.req(reqwest::Method::POST, &path).json(&query).send().await?;
+        let resp = self
+            .req(reqwest::Method::POST, &path)
+            .json(&query)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 
     // ── Bulk ──────────────────────────────────────────────────────────────
 
     pub async fn bulk_index(&self, index: &str, docs: &[(String, Value)]) -> Result<()> {
-        if docs.is_empty() { return Ok(()); }
+        if docs.is_empty() {
+            return Ok(());
+        }
 
         let mut ndjson = String::new();
         for (id, doc) in docs {
@@ -161,14 +179,16 @@ impl EsClient {
             // Collect the first failed item's reason for a useful error message
             let reason = body["items"]
                 .as_array()
-                .and_then(|items| items.iter().find_map(|item| {
-                    let op = item.get("index").or_else(|| item.get("create"))?;
-                    if op["status"].as_i64().unwrap_or(200) >= 400 {
-                        op["error"]["reason"].as_str().map(str::to_owned)
-                    } else {
-                        None
-                    }
-                }))
+                .and_then(|items| {
+                    items.iter().find_map(|item| {
+                        let op = item.get("index").or_else(|| item.get("create"))?;
+                        if op["status"].as_i64().unwrap_or(200) >= 400 {
+                            op["error"]["reason"].as_str().map(str::to_owned)
+                        } else {
+                            None
+                        }
+                    })
+                })
                 .unwrap_or_else(|| "unknown bulk error".to_string());
             anyhow::bail!("Bulk indexing failed: {reason}");
         }
@@ -199,7 +219,11 @@ impl EsClient {
 
     pub async fn put_template(&self, name: &str, body: Value) -> Result<Value> {
         let path = format!("_index_template/{name}");
-        let resp = self.req(reqwest::Method::PUT, &path).json(&body).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, &path)
+            .json(&body)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 
@@ -219,7 +243,11 @@ impl EsClient {
 
     pub async fn put_policy(&self, name: &str, body: Value) -> Result<Value> {
         let path = format!("_ilm/policy/{name}");
-        let resp = self.req(reqwest::Method::PUT, &path).json(&body).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, &path)
+            .json(&body)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 

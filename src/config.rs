@@ -6,9 +6,9 @@ use std::{collections::HashMap, fs};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
-    pub postgres:      PostgresConfig,
+    pub postgres: PostgresConfig,
     pub elasticsearch: ElasticsearchConfig,
-    pub graphql:       GraphQLConfig,
+    pub graphql: GraphQLConfig,
 
     #[serde(default)]
     pub entities: Vec<EntityConfig>,
@@ -16,10 +16,10 @@ pub struct Config {
 
 impl Config {
     pub fn load(path: &str) -> Result<Self> {
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("Cannot read config file: {path}"))?;
-        let cfg: Config = serde_yaml::from_str(&raw)
-            .with_context(|| format!("Invalid YAML in {path}"))?;
+        let raw =
+            fs::read_to_string(path).with_context(|| format!("Cannot read config file: {path}"))?;
+        let cfg: Config =
+            serde_yaml::from_str(&raw).with_context(|| format!("Invalid YAML in {path}"))?;
         Ok(cfg)
     }
 
@@ -37,25 +37,39 @@ pub struct PostgresConfig {
     #[serde(default = "default_pool_size")]
     pub pool_size: u32,
 }
-fn default_pool_size() -> u32 { 10 }
+fn default_pool_size() -> u32 {
+    10
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ElasticsearchConfig {
-    pub url:      String,
-    #[serde(default)] pub username: Option<String>,
-    #[serde(default)] pub password: Option<String>,
-    #[serde(default)] pub cloud_id: Option<String>,
+    pub url: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub cloud_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GraphQLConfig {
-    #[serde(default = "default_host")]    pub host:       String,
-    #[serde(default = "default_port")]    pub port:       u16,
-    #[serde(default = "bool_true")]       pub playground: bool,
+    #[serde(default = "default_host")]
+    pub host: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+    #[serde(default = "bool_true")]
+    pub playground: bool,
 }
-fn default_host() -> String { "0.0.0.0".into() }
-fn default_port() -> u16    { 4000 }
-fn bool_true()    -> bool   { true }
+fn default_host() -> String {
+    "0.0.0.0".into()
+}
+fn default_port() -> u16 {
+    4000
+}
+fn bool_true() -> bool {
+    true
+}
 
 // ── Entity config ─────────────────────────────────────────────────────────
 
@@ -93,8 +107,12 @@ pub struct EntityConfig {
     pub search: SearchConfig,
 }
 
-fn default_id_col()     -> String { "id".into() }
-fn default_batch_size() -> usize  { 500 }
+fn default_id_col() -> String {
+    "id".into()
+}
+fn default_batch_size() -> usize {
+    500
+}
 
 impl EntityConfig {
     pub fn notify_channel(&self) -> &str {
@@ -181,7 +199,9 @@ pub struct RelationConfig {
     pub filter: Option<String>,
 }
 
-fn default_relation_limit() -> i64 { 100 }
+fn default_relation_limit() -> i64 {
+    100
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -193,8 +213,6 @@ pub enum RelationKind {
     /// Many-to-many via a join table
     ManyToMany,
 }
-
-
 
 // ── search_text denormalization config ───────────────────────────────────
 
@@ -230,8 +248,12 @@ pub struct SearchTextConfig {
     pub sources: Vec<SearchTextSource>,
 }
 
-fn default_search_text_field() -> String { "search_text".into() }
-fn default_separator()          -> String { " ".into() }
+fn default_search_text_field() -> String {
+    "search_text".into()
+}
+fn default_separator() -> String {
+    " ".into()
+}
 
 /// One source contributing text to the `search_text` field.
 /// Exactly one of `column` or `relation` must be set.
@@ -303,13 +325,18 @@ impl SearchField {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ColumnConfig {
-    pub name:    String,
+    pub name: String,
     pub pg_type: PgType,
-    #[serde(default)] pub es_type:         Option<EsFieldType>,
-    #[serde(default = "bool_true")] pub keyword_subfield: bool,
-    #[serde(default = "bool_true")] pub graphql:          bool,
-    #[serde(default = "bool_true")] pub indexed:          bool,
-    #[serde(default)] pub es_extra: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub es_type: Option<EsFieldType>,
+    #[serde(default = "bool_true")]
+    pub keyword_subfield: bool,
+    #[serde(default = "bool_true")]
+    pub graphql: bool,
+    #[serde(default = "bool_true")]
+    pub indexed: bool,
+    #[serde(default)]
+    pub es_extra: HashMap<String, serde_json::Value>,
 }
 
 // ── Type enums ────────────────────────────────────────────────────────────
@@ -317,16 +344,40 @@ pub struct ColumnConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PgType {
-    Uuid, Text, Varchar, Int2, Int4, Int8, Float4, Float8,
-    Numeric, Bool, Timestamptz, Timestamp, Date, Jsonb, Json,
-    #[serde(other)] Other,
+    Uuid,
+    Text,
+    Varchar,
+    Int2,
+    Int4,
+    Int8,
+    Float4,
+    Float8,
+    Numeric,
+    Bool,
+    Timestamptz,
+    Timestamp,
+    Date,
+    Jsonb,
+    Json,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum EsFieldType {
-    Keyword, Text, Integer, Long, Float, Double, ScaledFloat,
-    Boolean, Date, Object, Nested, Ip,
+    Keyword,
+    Text,
+    Integer,
+    Long,
+    Float,
+    Double,
+    ScaledFloat,
+    Boolean,
+    Date,
+    Object,
+    Nested,
+    Ip,
 }
 
 impl std::fmt::Display for EsFieldType {
