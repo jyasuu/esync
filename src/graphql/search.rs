@@ -448,10 +448,13 @@ fn build_search_field(
                             Some(t) => t.clone(),
                             None => continue,
                         };
+                        // For ManyToMany: local_col is the join-table column name;
+                        // the hit document contains entity.id_column (the PK), not local_col.
+                        let m2m_id_col = entity.id_column.clone();
                         let local_vals: Vec<String> = hit_maps
                             .iter()
                             .filter_map(|m| {
-                                m.get(&rel.local_col)
+                                m.get(&m2m_id_col)
                                     .and_then(|v| v.as_str().map(str::to_owned))
                             })
                             .collect();
@@ -466,22 +469,25 @@ fn build_search_field(
                         )
                         .await?;
 
-                        // Each row carries the join local_col so we can group
+                        // Rows from fetch_m2m_rows carry rel.local_col as the group key.
+                        // Hits carry entity.id_column (m2m_id_col) — same UUID value,
+                        // different key name. Build groups keyed by the UUID value.
                         let mut groups: HashMap<String, Vec<JsValue>> = HashMap::new();
-                        for row in rows {
-                            let local_key = row
-                                .get(&rel.local_col)
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_owned();
+                        for mut row in rows {
+                            // Extract grouping key (rel.local_col) and remove it from the doc
+                            let group_key = row
+                                .remove(&rel.local_col)
+                                .and_then(|v| v.as_str().map(str::to_owned))
+                                .unwrap_or_default();
                             groups
-                                .entry(local_key)
+                                .entry(group_key)
                                 .or_default()
                                 .push(JsValue::Object(row.into_iter().collect()));
                         }
                         for hit in &mut hit_maps {
+                            // m2m_id_col is the entity PK (= same UUID as rel.local_col in join table)
                             let local_val = hit
-                                .get(&rel.local_col)
+                                .get(&m2m_id_col)
                                 .and_then(|v| v.as_str())
                                 .unwrap_or_default()
                                 .to_owned();

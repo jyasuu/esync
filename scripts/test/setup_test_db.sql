@@ -139,7 +139,7 @@ BEGIN
          'cccccccc-0000-0000-0000-000000000001',
          'pending',  199.00, '2024-02-20T12:00:00Z', NULL, '{"source":"mobile"}'),
         ('10000000-0000-0000-0000-000000000003',
-         'cccccccc-0000-0000-0000-000000000002',
+         'cccccccc-0000-0000-0000-000000000001',
          'cancelled', 9.99,  '2024-03-01T08:00:00Z', NULL, '{"source":"web","promo":"SAVE10"}')
     ON CONFLICT (id) DO UPDATE SET
         customer_id = EXCLUDED.customer_id,

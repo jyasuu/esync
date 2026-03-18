@@ -87,19 +87,27 @@ fn build_object_type(entity: &EntityConfig, cfg: Arc<Config>, pool: Arc<PgPool>)
             } // non-null list
         };
 
+        // For ManyToMany, local_col is the join-table column name, not a parent column.
+        // Capture the entity's own PK before the closure so we can use it inside.
+        let entity_id_col = entity.id_column.clone();
         let field_name = rel.field.clone();
         obj = obj.field(Field::new(field_name, return_type, move |ctx| {
             let rel = rel.clone();
+            let entity_id_col = entity_id_col.clone();
             let cfg = Arc::clone(&cfg_r);
             let pool = Arc::clone(&pool_r);
 
             FieldFuture::new(async move {
-                // Extract the local key value from the parent object
+                // For ManyToMany the parent row has the entity's PK (entity_id_col),
+                // not rel.local_col (which names the join-table column).
+                let parent_field = match rel.kind {
+                    RelationKind::ManyToMany => entity_id_col.as_str(),
+                    _ => rel.local_col.as_str(),
+                };
                 let local_val = match ctx.parent_value.as_value() {
-                    Some(GqlValue::Object(map)) => map
-                        .get(rel.local_col.as_str())
-                        .cloned()
-                        .unwrap_or(GqlValue::Null),
+                    Some(GqlValue::Object(map)) => {
+                        map.get(parent_field).cloned().unwrap_or(GqlValue::Null)
+                    }
                     _ => GqlValue::Null,
                 };
 
