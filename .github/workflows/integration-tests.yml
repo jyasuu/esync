@@ -131,6 +131,15 @@ jobs:
       - name: Run CDC watch tests
         run: cargo test --test test_watch_cdc -- --nocapture
 
+      - name: Run relation tests
+        run: cargo test --test test_relations -- --nocapture
+
+      - name: Run search tests
+        run: cargo test --test test_search -- --nocapture
+
+      - name: Run search_text denormalization tests
+        run: cargo test --test test_search_text -- --nocapture
+
       - name: Upload test artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
