@@ -224,8 +224,9 @@ async fn test_index_template_lifecycle() -> Result<()> {
     })).await?;
 
     let fetched = es.get_template(name).await?;
+    let empty = vec![];
     let names: Vec<&str> = fetched["index_templates"]
-        .as_array().unwrap_or(&vec![])
+        .as_array().unwrap_or(&empty)
         .iter()
         .filter_map(|t| t["name"].as_str())
         .collect();

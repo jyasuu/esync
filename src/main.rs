@@ -1,5 +1,5 @@
-// Modules are declared in lib.rs; the binary references them via crate::.
-use crate::{commands, config};
+// Modules live in lib.rs; the binary imports them via the crate name.
+use esync::{commands, config};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
