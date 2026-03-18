@@ -21,7 +21,11 @@ impl EsClient {
             _ => None,
         };
 
-        Ok(Self { http, base: cfg.url.trim_end_matches('/').to_string(), auth })
+        Ok(Self {
+            http,
+            base: cfg.url.trim_end_matches('/').to_string(),
+            auth,
+        })
     }
 
     // ── generic helpers ───────────────────────────────────────────────────
@@ -94,7 +98,11 @@ impl EsClient {
 
     pub async fn put_mapping(&self, index: &str, body: Value) -> Result<Value> {
         let path = format!("{index}/_mapping");
-        let resp = self.req(reqwest::Method::PUT, &path).json(&body).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, &path)
+            .json(&body)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 
@@ -102,7 +110,11 @@ impl EsClient {
 
     pub async fn put_document(&self, index: &str, id: &str, doc: Value) -> Result<Value> {
         let path = format!("{index}/_doc/{id}");
-        let resp = self.req(reqwest::Method::PUT, &path).json(&doc).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, &path)
+            .json(&doc)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 
@@ -121,14 +133,20 @@ impl EsClient {
     /// POST /<index>/_search with arbitrary body
     pub async fn search(&self, index: &str, query: Value) -> Result<Value> {
         let path = format!("{index}/_search");
-        let resp = self.req(reqwest::Method::POST, &path).json(&query).send().await?;
+        let resp = self
+            .req(reqwest::Method::POST, &path)
+            .json(&query)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 
     // ── Bulk ──────────────────────────────────────────────────────────────
 
     pub async fn bulk_index(&self, index: &str, docs: &[(String, Value)]) -> Result<()> {
-        if docs.is_empty() { return Ok(()); }
+        if docs.is_empty() {
+            return Ok(());
+        }
 
         let mut ndjson = String::new();
         for (id, doc) in docs {
@@ -177,7 +195,11 @@ impl EsClient {
 
     pub async fn put_template(&self, name: &str, body: Value) -> Result<Value> {
         let path = format!("_index_template/{name}");
-        let resp = self.req(reqwest::Method::PUT, &path).json(&body).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, &path)
+            .json(&body)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 
@@ -197,7 +219,11 @@ impl EsClient {
 
     pub async fn put_policy(&self, name: &str, body: Value) -> Result<Value> {
         let path = format!("_ilm/policy/{name}");
-        let resp = self.req(reqwest::Method::PUT, &path).json(&body).send().await?;
+        let resp = self
+            .req(reqwest::Method::PUT, &path)
+            .json(&body)
+            .send()
+            .await?;
         Self::check(resp).await
     }
 

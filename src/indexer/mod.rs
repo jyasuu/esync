@@ -1,26 +1,23 @@
 pub mod mapping;
 
-use crate::{
-    config::EntityConfig,
-    db,
-    elastic::EsClient,
-};
+use crate::{config::EntityConfig, db, elastic::EsClient};
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
 /// Full index rebuild for one entity.
-pub async fn rebuild_index(
-    pool: &PgPool,
-    es: &EsClient,
-    entity: &EntityConfig,
-) -> Result<()> {
+pub async fn rebuild_index(pool: &PgPool, es: &EsClient, entity: &EntityConfig) -> Result<()> {
     let columns: Vec<&str> = entity.columns.iter().map(|c| c.name.as_str()).collect();
 
     // Count total rows
     let total = db::count_rows(pool, &entity.table, entity.filter.as_deref()).await?;
-    tracing::info!("Indexing {} rows from `{}` → `{}`", total, entity.table, entity.index);
+    tracing::info!(
+        "Indexing {} rows from `{}` → `{}`",
+        total,
+        entity.table,
+        entity.index
+    );
 
     // (Re)create index
     let body = mapping::build_index_body(&entity.columns, 1, 0);
@@ -28,10 +25,8 @@ pub async fn rebuild_index(
 
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.cyan} [{bar:40.cyan/blue}] {pos}/{len} ({eta})"
-        )?
-        .progress_chars("█▇▆▅▄▃▂▁  "),
+        ProgressStyle::with_template("{spinner:.cyan} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
+            .progress_chars("█▇▆▅▄▃▂▁  "),
     );
 
     let mut offset: i64 = 0;

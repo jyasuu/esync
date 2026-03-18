@@ -3,15 +3,15 @@
 
 use anyhow::Result;
 use serde_json::Value;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::time::Duration;
 use tokio::time::sleep;
 
 // ── Connection constants (match esync.test.yaml) ──────────────────────────
 
-pub const PG_URL:   &str = "postgres://esync:esync@localhost:5432/esync_test";
-pub const ES_URL:   &str = "http://localhost:9200";
-pub const GQL_URL:  &str = "http://127.0.0.1:4001/graphql";
+pub const PG_URL: &str = "postgres://esync:esync@localhost:5432/esync_test";
+pub const ES_URL: &str = "http://localhost:9200";
+pub const GQL_URL: &str = "http://127.0.0.1:4001/graphql";
 pub const CFG_PATH: &str = "esync.test.yaml";
 
 // ── Fixed UUIDs from scripts/test/setup_test_db.sql ──────────────────────
@@ -53,10 +53,15 @@ fn http() -> reqwest::Client {
 pub async fn es_get(index: &str, id: &str) -> Result<Option<Value>> {
     let resp = http()
         .get(format!("{ES_URL}/{index}/_doc/{id}"))
-        .send().await?;
-    if resp.status().as_u16() == 404 { return Ok(None); }
+        .send()
+        .await?;
+    if resp.status().as_u16() == 404 {
+        return Ok(None);
+    }
     let body: Value = resp.json().await?;
-    if body["found"].as_bool() == Some(false) { return Ok(None); }
+    if body["found"].as_bool() == Some(false) {
+        return Ok(None);
+    }
     Ok(body.get("_source").cloned())
 }
 
@@ -65,16 +70,15 @@ pub async fn es_all(index: &str) -> Result<Vec<Value>> {
     let resp = http()
         .post(format!("{ES_URL}/{index}/_search"))
         .json(&serde_json::json!({ "query": { "match_all": {} }, "size": 1000 }))
-        .send().await?;
+        .send()
+        .await?;
     let data: Value = resp.json().await?;
     Ok(data["hits"]["hits"].as_array().cloned().unwrap_or_default())
 }
 
 /// DELETE /<index> — silently ignores 404.
 pub async fn es_delete_index(index: &str) -> Result<()> {
-    let _ = http()
-        .delete(format!("{ES_URL}/{index}"))
-        .send().await;
+    let _ = http().delete(format!("{ES_URL}/{index}")).send().await;
     Ok(())
 }
 
@@ -82,7 +86,8 @@ pub async fn es_delete_index(index: &str) -> Result<()> {
 pub async fn es_refresh(index: &str) -> Result<()> {
     http()
         .post(format!("{ES_URL}/{index}/_refresh"))
-        .send().await?;
+        .send()
+        .await?;
     Ok(())
 }
 
@@ -92,13 +97,17 @@ pub async fn es_refresh(index: &str) -> Result<()> {
 /// Returns whether the predicate returned `true` before the deadline.
 pub async fn wait_until<F, Fut>(timeout: Duration, interval: Duration, mut predicate: F) -> bool
 where
-    F:   FnMut() -> Fut,
+    F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if predicate().await { return true; }
-        if tokio::time::Instant::now() >= deadline { return false; }
+        if predicate().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
         sleep(interval).await;
     }
 }
@@ -109,7 +118,7 @@ where
 pub async fn gql(query: &str, variables: Option<Value>) -> Result<Value> {
     let body = match variables {
         Some(v) => serde_json::json!({ "query": query, "variables": v }),
-        None    => serde_json::json!({ "query": query }),
+        None => serde_json::json!({ "query": query }),
     };
     let resp = http().post(GQL_URL).json(&body).send().await?;
     Ok(resp.json().await?)

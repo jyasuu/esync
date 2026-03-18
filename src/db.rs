@@ -13,17 +13,15 @@ pub async fn connect(url: &str, pool_size: u32) -> Result<PgPool> {
 
 /// Fetch a page of rows from `table` as column-name → JSON value maps.
 pub async fn fetch_rows(
-    pool:    &PgPool,
-    table:   &str,
+    pool: &PgPool,
+    table: &str,
     columns: &[&str],
-    filter:  Option<&str>,
-    limit:   i64,
-    offset:  i64,
+    filter: Option<&str>,
+    limit: i64,
+    offset: i64,
 ) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-    let col_list     = columns.join(", ");
-    let where_clause = filter
-        .map(|f| format!("WHERE {f}"))
-        .unwrap_or_default();
+    let col_list = columns.join(", ");
+    let where_clause = filter.map(|f| format!("WHERE {f}")).unwrap_or_default();
 
     let sql = format!(
         "SELECT {col_list} FROM {table} {where_clause} ORDER BY 1 LIMIT {limit} OFFSET {offset}"
@@ -31,27 +29,19 @@ pub async fn fetch_rows(
 
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
 
-    rows.iter()
-        .map(|row| row_to_map(row, columns))
-        .collect()
+    rows.iter().map(|row| row_to_map(row, columns)).collect()
 }
 
 /// Count rows in `table` matching the optional filter.
-pub async fn count_rows(
-    pool:   &PgPool,
-    table:  &str,
-    filter: Option<&str>,
-) -> Result<i64> {
-    let where_clause = filter
-        .map(|f| format!("WHERE {f}"))
-        .unwrap_or_default();
+pub async fn count_rows(pool: &PgPool, table: &str, filter: Option<&str>) -> Result<i64> {
+    let where_clause = filter.map(|f| format!("WHERE {f}")).unwrap_or_default();
     let sql = format!("SELECT COUNT(*) FROM {table} {where_clause}");
     let (count,): (i64,) = sqlx::query_as(&sql).fetch_one(pool).await?;
     Ok(count)
 }
 
 fn row_to_map(
-    row:     &sqlx::postgres::PgRow,
+    row: &sqlx::postgres::PgRow,
     columns: &[&str],
 ) -> Result<HashMap<String, serde_json::Value>> {
     let mut map = HashMap::new();
@@ -66,7 +56,9 @@ fn row_to_map(
 fn try_decode(row: &sqlx::postgres::PgRow, col: &str) -> serde_json::Value {
     // bool — must come before integers to avoid mis-typing
     if let Ok(v) = row.try_get::<Option<bool>, _>(col) {
-        return v.map(serde_json::Value::Bool).unwrap_or(serde_json::Value::Null);
+        return v
+            .map(serde_json::Value::Bool)
+            .unwrap_or(serde_json::Value::Null);
     }
     // integers
     if let Ok(v) = row.try_get::<Option<i32>, _>(col) {
@@ -92,7 +84,9 @@ fn try_decode(row: &sqlx::postgres::PgRow, col: &str) -> serde_json::Value {
     }
     // Everything else as text
     if let Ok(v) = row.try_get::<Option<String>, _>(col) {
-        return v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null);
+        return v
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null);
     }
     serde_json::Value::Null
 }

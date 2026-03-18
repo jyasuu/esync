@@ -7,12 +7,12 @@ use std::fs;
 pub async fn run(cfg: Config, cmd: EsCommands) -> Result<()> {
     let es = EsClient::new(&cfg.elasticsearch)?;
     match cmd {
-        EsCommands::Index(c)      => index_cmd(es, c).await,
-        EsCommands::Doc(c)        => doc_cmd(es, c).await,
-        EsCommands::Search(c)     => search_cmd(es, c).await,
+        EsCommands::Index(c) => index_cmd(es, c).await,
+        EsCommands::Doc(c) => doc_cmd(es, c).await,
+        EsCommands::Search(c) => search_cmd(es, c).await,
         EsCommands::Datastream(c) => datastream_cmd(es, c).await,
-        EsCommands::Template(c)   => template_cmd(es, c).await,
-        EsCommands::Policy(c)     => policy_cmd(es, c).await,
+        EsCommands::Template(c) => template_cmd(es, c).await,
+        EsCommands::Policy(c) => policy_cmd(es, c).await,
     }
 }
 
@@ -67,7 +67,7 @@ pub enum IndexCommands {
 async fn index_cmd(es: EsClient, cmd: IndexCommands) -> Result<()> {
     match cmd {
         IndexCommands::List(a) => print_json(es.list_indices(&a.pattern).await?),
-        IndexCommands::Get(a)  => print_json(es.get_index(&a.name).await?),
+        IndexCommands::Get(a) => print_json(es.get_index(&a.name).await?),
         IndexCommands::Create(a) => {
             let body = read_json(&a.file)?;
             print_json(es.create_index(&a.name, body).await?);
@@ -135,7 +135,7 @@ pub enum DatastreamCommands {
 
 async fn datastream_cmd(es: EsClient, cmd: DatastreamCommands) -> Result<()> {
     match cmd {
-        DatastreamCommands::List(a)   => print_json(es.list_datastreams(&a.pattern).await?),
+        DatastreamCommands::List(a) => print_json(es.list_datastreams(&a.pattern).await?),
         DatastreamCommands::Create(a) => print_json(es.create_datastream(&a.name).await?),
         DatastreamCommands::Delete(a) => print_json(es.delete_datastream(&a.name).await?),
     }
@@ -154,7 +154,7 @@ pub enum TemplateCommands {
 
 async fn template_cmd(es: EsClient, cmd: TemplateCommands) -> Result<()> {
     match cmd {
-        TemplateCommands::Get(a)    => print_json(es.get_template(&a.name).await?),
+        TemplateCommands::Get(a) => print_json(es.get_template(&a.name).await?),
         TemplateCommands::Delete(a) => print_json(es.delete_template(&a.name).await?),
         TemplateCommands::Put(a) => {
             let body = read_json(&a.file)?;
@@ -176,7 +176,7 @@ pub enum PolicyCommands {
 
 async fn policy_cmd(es: EsClient, cmd: PolicyCommands) -> Result<()> {
     match cmd {
-        PolicyCommands::Get(a)    => print_json(es.get_policy(&a.name).await?),
+        PolicyCommands::Get(a) => print_json(es.get_policy(&a.name).await?),
         PolicyCommands::Delete(a) => print_json(es.delete_policy(&a.name).await?),
         PolicyCommands::Put(a) => {
             let body = read_json(&a.file)?;
@@ -233,5 +233,8 @@ fn read_json(path: &str) -> Result<serde_json::Value> {
 }
 
 fn print_json(v: serde_json::Value) {
-    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default().green());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&v).unwrap_or_default().green()
+    );
 }

@@ -8,18 +8,18 @@ pub fn derive_es_type(col: &ColumnConfig) -> EsFieldType {
         return explicit.clone();
     }
     match col.pg_type {
-        PgType::Uuid                           => EsFieldType::Keyword,
-        PgType::Text | PgType::Varchar         => EsFieldType::Text,
-        PgType::Int2 | PgType::Int4            => EsFieldType::Integer,
-        PgType::Int8                           => EsFieldType::Long,
-        PgType::Float4                         => EsFieldType::Float,
-        PgType::Float8                         => EsFieldType::Double,
-        PgType::Numeric                        => EsFieldType::ScaledFloat,
-        PgType::Bool                           => EsFieldType::Boolean,
+        PgType::Uuid => EsFieldType::Keyword,
+        PgType::Text | PgType::Varchar => EsFieldType::Text,
+        PgType::Int2 | PgType::Int4 => EsFieldType::Integer,
+        PgType::Int8 => EsFieldType::Long,
+        PgType::Float4 => EsFieldType::Float,
+        PgType::Float8 => EsFieldType::Double,
+        PgType::Numeric => EsFieldType::ScaledFloat,
+        PgType::Bool => EsFieldType::Boolean,
         PgType::Timestamptz | PgType::Timestamp => EsFieldType::Date,
-        PgType::Date                           => EsFieldType::Date,
-        PgType::Jsonb | PgType::Json           => EsFieldType::Object,
-        PgType::Other                          => EsFieldType::Keyword,
+        PgType::Date => EsFieldType::Date,
+        PgType::Jsonb | PgType::Json => EsFieldType::Object,
+        PgType::Other => EsFieldType::Keyword,
     }
 }
 
@@ -69,7 +69,11 @@ fn build_field_def(es_type: &EsFieldType, _col: &ColumnConfig) -> Value {
 }
 
 /// Build a full index create body including settings + mappings.
-pub fn build_index_body(columns: &[ColumnConfig], number_of_shards: u32, number_of_replicas: u32) -> Value {
+pub fn build_index_body(
+    columns: &[ColumnConfig],
+    number_of_shards: u32,
+    number_of_replicas: u32,
+) -> Value {
     json!({
         "settings": {
             "number_of_shards": number_of_shards,

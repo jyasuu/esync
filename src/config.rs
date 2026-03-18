@@ -19,10 +19,10 @@ pub struct Config {
 
 impl Config {
     pub fn load(path: &str) -> Result<Self> {
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("Cannot read config file: {path}"))?;
-        let cfg: Config = serde_yaml::from_str(&raw)
-            .with_context(|| format!("Invalid YAML in {path}"))?;
+        let raw =
+            fs::read_to_string(path).with_context(|| format!("Cannot read config file: {path}"))?;
+        let cfg: Config =
+            serde_yaml::from_str(&raw).with_context(|| format!("Invalid YAML in {path}"))?;
         Ok(cfg)
     }
 }
@@ -39,7 +39,9 @@ pub struct PostgresConfig {
     pub pool_size: u32,
 }
 
-fn default_pool_size() -> u32 { 10 }
+fn default_pool_size() -> u32 {
+    10
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ElasticsearchConfig {
@@ -64,9 +66,15 @@ pub struct GraphQLConfig {
     pub playground: bool,
 }
 
-fn default_host() -> String { "0.0.0.0".into() }
-fn default_port() -> u16 { 4000 }
-fn bool_true() -> bool { true }
+fn default_host() -> String {
+    "0.0.0.0".into()
+}
+fn default_port() -> u16 {
+    4000
+}
+fn bool_true() -> bool {
+    true
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Entity config (the core mapping DSL)
@@ -96,8 +104,12 @@ pub struct EntityConfig {
     pub batch_size: usize,
 }
 
-fn default_id_col()    -> String { "id".into() }
-fn default_batch_size() -> usize { 500 }
+fn default_id_col() -> String {
+    "id".into()
+}
+fn default_batch_size() -> usize {
+    500
+}
 
 impl EntityConfig {
     pub fn notify_channel(&self) -> &str {
