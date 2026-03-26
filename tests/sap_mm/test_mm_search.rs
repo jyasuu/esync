@@ -65,11 +65,17 @@ async fn test_mm_search_material_by_description() -> Result<()> {
             total
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"].as_array().unwrap();
-    assert!(!hits.is_empty(), "Should find materials matching 'hydraulic'");
+    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+        .as_array()
+        .unwrap();
+    assert!(
+        !hits.is_empty(),
+        "Should find materials matching 'hydraulic'"
+    );
     assert!(
         hits.iter().any(|h| h["material_number"] == "MAT-2000"),
         "MAT-2000 (Hydraulic Pump) must be in results"
@@ -91,11 +97,17 @@ async fn test_mm_search_material_by_material_number() -> Result<()> {
             total
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"].as_array().unwrap();
-    assert!(!hits.is_empty(), "Should find MAT-1000 by its material number");
+    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+        .as_array()
+        .unwrap();
+    assert!(
+        !hits.is_empty(),
+        "Should find MAT-1000 by its material number"
+    );
     assert_eq!(hits[0]["material_number"], "MAT-1000");
 
     srv.abort();
@@ -114,10 +126,13 @@ async fn test_mm_search_material_by_group() -> Result<()> {
             total
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"].as_array().unwrap();
+    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+        .as_array()
+        .unwrap();
     assert!(
         hits.iter().all(|h| h["material_group"] == "MG-STEEL"),
         "All hits for MG-STEEL query should belong to that group"
@@ -141,16 +156,25 @@ async fn test_mm_search_material_with_enriched_stock() -> Result<()> {
             }
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"].as_array().unwrap();
+    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+        .as_array()
+        .unwrap();
     assert!(!hits.is_empty(), "steel sheet search should return results");
 
     // MAT-1000 should be the top hit and have enriched stock
-    let mat = hits.iter().find(|h| h["material_number"] == "MAT-1000").unwrap();
+    let mat = hits
+        .iter()
+        .find(|h| h["material_number"] == "MAT-1000")
+        .unwrap();
     let stocks = mat["stock_levels"].as_array().unwrap();
-    assert!(!stocks.is_empty(), "stock_levels should be enriched via enrich config");
+    assert!(
+        !stocks.is_empty(),
+        "stock_levels should be enriched via enrich config"
+    );
 
     srv.abort();
     let _ = srv.await;
@@ -170,15 +194,24 @@ async fn test_mm_search_material_with_enriched_plant_views() -> Result<()> {
             }
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"].as_array().unwrap();
+    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+        .as_array()
+        .unwrap();
     let bolt = hits.iter().find(|h| h["material_number"] == "MAT-1001");
-    assert!(bolt.is_some(), "MAT-1001 (bolt) should appear in search results");
+    assert!(
+        bolt.is_some(),
+        "MAT-1001 (bolt) should appear in search results"
+    );
 
     let views = bolt.unwrap()["plant_views"].as_array().unwrap();
-    assert!(!views.is_empty(), "plant_views enrichment should work for bolt");
+    assert!(
+        !views.is_empty(),
+        "plant_views enrichment should work for bolt"
+    );
 
     srv.abort();
     let _ = srv.await;
@@ -196,10 +229,13 @@ async fn test_mm_search_material_no_results_for_garbage() -> Result<()> {
             total
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let total = resp["data"]["search_MaterialMaster"]["total"].as_u64().unwrap_or(0);
+    let total = resp["data"]["search_MaterialMaster"]["total"]
+        .as_u64()
+        .unwrap_or(0);
     assert_eq!(total, 0, "Nonsense query should return zero results");
 
     srv.abort();
@@ -218,14 +254,22 @@ async fn test_mm_search_material_limit_respected() -> Result<()> {
             total
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"].as_array().unwrap();
+    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+        .as_array()
+        .unwrap();
     assert_eq!(hits.len(), 1, "limit: 1 must return exactly 1 result");
 
-    let total = resp["data"]["search_MaterialMaster"]["total"].as_u64().unwrap_or(0);
-    assert!(total >= 1, "total should reflect all matching docs, not just the page");
+    let total = resp["data"]["search_MaterialMaster"]["total"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(
+        total >= 1,
+        "total should reflect all matching docs, not just the page"
+    );
 
     srv.abort();
     let _ = srv.await;
@@ -245,10 +289,13 @@ async fn test_mm_search_vendor_by_name() -> Result<()> {
             total
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_VendorMaster"]["hits"].as_array().unwrap();
+    let hits = resp["data"]["search_VendorMaster"]["hits"]
+        .as_array()
+        .unwrap();
     assert!(!hits.is_empty(), "Should find Acme by name");
     assert_eq!(hits[0]["vendor_number"], "V000001");
     assert_eq!(hits[0]["country"], "US");
@@ -268,10 +315,13 @@ async fn test_mm_search_vendor_by_vendor_number() -> Result<()> {
             hits { vendor_number name }
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_VendorMaster"]["hits"].as_array().unwrap();
+    let hits = resp["data"]["search_VendorMaster"]["hits"]
+        .as_array()
+        .unwrap();
     assert!(!hits.is_empty(), "Should find GlobalParts by vendor number");
     assert_eq!(hits[0]["vendor_number"], "V000002");
 
@@ -290,11 +340,17 @@ async fn test_mm_search_vendor_by_city() -> Result<()> {
             hits { vendor_number name city }
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_VendorMaster"]["hits"].as_array().unwrap();
-    assert!(!hits.is_empty(), "Should find GlobalParts by city Stuttgart");
+    let hits = resp["data"]["search_VendorMaster"]["hits"]
+        .as_array()
+        .unwrap();
+    assert!(
+        !hits.is_empty(),
+        "Should find GlobalParts by city Stuttgart"
+    );
 
     let global = hits.iter().find(|h| h["vendor_number"] == "V000002");
     assert!(global.is_some(), "GlobalParts (Stuttgart) must appear");
@@ -315,10 +371,13 @@ async fn test_mm_search_vendor_with_highlights() -> Result<()> {
             highlights { field snippets }
         } }"#,
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_VendorMaster"]["hits"].as_array().unwrap();
+    let hits = resp["data"]["search_VendorMaster"]["hits"]
+        .as_array()
+        .unwrap();
     assert!(!hits.is_empty(), "Should find Pacific Plastics");
 
     // Highlights should be populated when the query matches a configured field

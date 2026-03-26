@@ -39,7 +39,12 @@ async fn start_server(cfg: Config) -> JoinHandle<()> {
     handle
 }
 
-async fn setup() -> Result<(JoinHandle<()>, sqlx::PgPool, esync::elastic::EsClient, Config)> {
+async fn setup() -> Result<(
+    JoinHandle<()>,
+    sqlx::PgPool,
+    esync::elastic::EsClient,
+    Config,
+)> {
     let cfg = Config::load(CFG_PATH)?;
     let pool = db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?;
     let es = esync::elastic::EsClient::new(&cfg.elasticsearch)?;
@@ -59,7 +64,11 @@ async fn setup() -> Result<(JoinHandle<()>, sqlx::PgPool, esync::elastic::EsClie
 async fn test_gql_list_material_count() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
-    let resp = gql("{ list_MaterialMaster(limit: 20) { id material_number } }", None).await?;
+    let resp = gql(
+        "{ list_MaterialMaster(limit: 20) { id material_number } }",
+        None,
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
     let items = resp["data"]["list_MaterialMaster"].as_array().unwrap();
@@ -81,10 +90,18 @@ async fn test_gql_list_material_pagination() -> Result<()> {
     assert_no_gql_errors(&p1);
     assert_no_gql_errors(&p2);
 
-    let ids1: Vec<&str> = p1["data"]["list_MaterialMaster"].as_array().unwrap()
-        .iter().filter_map(|v| v["id"].as_str()).collect();
-    let ids2: Vec<&str> = p2["data"]["list_MaterialMaster"].as_array().unwrap()
-        .iter().filter_map(|v| v["id"].as_str()).collect();
+    let ids1: Vec<&str> = p1["data"]["list_MaterialMaster"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v["id"].as_str())
+        .collect();
+    let ids2: Vec<&str> = p2["data"]["list_MaterialMaster"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v["id"].as_str())
+        .collect();
 
     assert_eq!(ids1.len(), 2);
     assert_eq!(ids2.len(), 2);
@@ -112,7 +129,8 @@ async fn test_gql_get_material_fields() -> Result<()> {
             }} }}"#
         ),
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
     let mat = &resp["data"]["get_MaterialMaster"];
@@ -134,9 +152,13 @@ async fn test_gql_get_material_not_found() -> Result<()> {
     let resp = gql(
         "{ get_MaterialMaster(id: \"00000000-dead-beef-0000-000000000000\") { id } }",
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
-    assert!(resp["data"]["get_MaterialMaster"].is_null(), "Unknown ID must return null");
+    assert!(
+        resp["data"]["get_MaterialMaster"].is_null(),
+        "Unknown ID must return null"
+    );
 
     srv.abort();
     let _ = srv.await;
@@ -160,10 +182,13 @@ async fn test_gql_material_with_plant_views() -> Result<()> {
             }} }}"#
         ),
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let views = resp["data"]["get_MaterialMaster"]["plant_views"].as_array().unwrap();
+    let views = resp["data"]["get_MaterialMaster"]["plant_views"]
+        .as_array()
+        .unwrap();
     assert_eq!(views.len(), 1, "MAT-1000 has one plant_data row");
     assert_eq!(views[0]["plant"], "1000");
     assert_eq!(views[0]["mrp_type"], "PD");
@@ -191,16 +216,22 @@ async fn test_gql_material_with_stock_levels() -> Result<()> {
             }} }}"#
         ),
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let stocks = resp["data"]["get_MaterialMaster"]["stock_levels"].as_array().unwrap();
+    let stocks = resp["data"]["get_MaterialMaster"]["stock_levels"]
+        .as_array()
+        .unwrap();
     assert_eq!(stocks.len(), 1, "MAT-1000 has one storage_location row");
     assert_eq!(stocks[0]["plant"], "1000");
     assert_eq!(stocks[0]["sloc"], "0001");
 
     let qty = parse_numeric(&stocks[0]["unrestricted_stock"]).unwrap_or(0.0);
-    assert!((qty - 150.0).abs() < 0.01, "unrestricted_stock should be 150, got {qty}");
+    assert!(
+        (qty - 150.0).abs() < 0.01,
+        "unrestricted_stock should be 150, got {qty}"
+    );
 
     srv.abort();
     let _ = srv.await;
@@ -225,21 +256,33 @@ async fn test_gql_material_purchasing_infos_with_vendor() -> Result<()> {
             }} }}"#
         ),
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let infos = resp["data"]["get_MaterialMaster"]["purchasing_infos"].as_array().unwrap();
+    let infos = resp["data"]["get_MaterialMaster"]["purchasing_infos"]
+        .as_array()
+        .unwrap();
     assert_eq!(infos.len(), 2, "MAT-1000 has 2 purchasing info records");
 
     // Both vendors should be resolved
     for info in infos {
-        assert!(!info["vendor"]["vendor_number"].is_null(), "vendor must be resolved");
+        assert!(
+            !info["vendor"]["vendor_number"].is_null(),
+            "vendor must be resolved"
+        );
     }
 
     // Verify Acme's price
-    let acme = infos.iter().find(|i| i["vendor"]["vendor_number"] == "V000001").unwrap();
+    let acme = infos
+        .iter()
+        .find(|i| i["vendor"]["vendor_number"] == "V000001")
+        .unwrap();
     let price = parse_numeric(&acme["net_price"]).unwrap_or(0.0);
-    assert!((price - 78.5).abs() < 0.01, "Acme net_price should be 78.50, got {price}");
+    assert!(
+        (price - 78.5).abs() < 0.01,
+        "Acme net_price should be 78.50, got {price}"
+    );
 
     srv.abort();
     let _ = srv.await;
@@ -264,15 +307,24 @@ async fn test_gql_material_movements() -> Result<()> {
             }} }}"#
         ),
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let moves = resp["data"]["get_MaterialMaster"]["movements"].as_array().unwrap();
-    assert!(!moves.is_empty(), "MAT-1000 should have goods movement records");
+    let moves = resp["data"]["get_MaterialMaster"]["movements"]
+        .as_array()
+        .unwrap();
+    assert!(
+        !moves.is_empty(),
+        "MAT-1000 should have goods movement records"
+    );
 
     let gr = moves.iter().find(|m| m["movement_type"] == "101").unwrap();
     assert_eq!(gr["doc_number"], "5000000001");
-    assert!(!gr["vendor"]["vendor_number"].is_null(), "GR vendor must be resolved");
+    assert!(
+        !gr["vendor"]["vendor_number"].is_null(),
+        "GR vendor must be resolved"
+    );
 
     srv.abort();
     let _ = srv.await;
@@ -286,7 +338,11 @@ async fn test_gql_material_movements() -> Result<()> {
 async fn test_gql_list_vendor_count() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
-    let resp = gql("{ list_VendorMaster(limit: 20) { id vendor_number name country } }", None).await?;
+    let resp = gql(
+        "{ list_VendorMaster(limit: 20) { id vendor_number name country } }",
+        None,
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
     let vendors = resp["data"]["list_VendorMaster"].as_array().unwrap();
@@ -315,14 +371,20 @@ async fn test_gql_vendor_purchasing_infos_with_material() -> Result<()> {
             }} }}"#
         ),
         None,
-    ).await?;
+    )
+    .await?;
     assert_no_gql_errors(&resp);
 
-    let infos = resp["data"]["get_VendorMaster"]["purchasing_infos"].as_array().unwrap();
+    let infos = resp["data"]["get_VendorMaster"]["purchasing_infos"]
+        .as_array()
+        .unwrap();
     assert_eq!(infos.len(), 2, "Acme supplies 2 materials");
 
     for info in infos {
-        assert!(!info["material"]["material_number"].is_null(), "material must be resolved");
+        assert!(
+            !info["material"]["material_number"].is_null(),
+            "material must be resolved"
+        );
     }
 
     srv.abort();
@@ -344,7 +406,11 @@ async fn test_gql_list_storage_location_with_filter() -> Result<()> {
     assert_no_gql_errors(&resp);
 
     let rows = resp["data"]["list_StorageLocation"].as_array().unwrap();
-    assert_eq!(rows.len(), 4, "All 4 storage_location rows are in plant 1000");
+    assert_eq!(
+        rows.len(),
+        4,
+        "All 4 storage_location rows are in plant 1000"
+    );
     for row in rows {
         assert_eq!(row["plant"], "1000");
     }

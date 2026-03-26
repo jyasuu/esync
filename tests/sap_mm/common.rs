@@ -17,24 +17,24 @@ pub const CFG_PATH: &str = "examples/sap-mm/esync-sap-mm.test.yaml";
 
 // ── Fixed UUIDs from setup_test_db.sql ───────────────────────────────────────
 
-pub const VENDOR_ACME: &str    = "aa000000-0000-0000-0000-000000000001";
-pub const VENDOR_GLOBAL: &str  = "aa000000-0000-0000-0000-000000000002";
+pub const VENDOR_ACME: &str = "aa000000-0000-0000-0000-000000000001";
+pub const VENDOR_GLOBAL: &str = "aa000000-0000-0000-0000-000000000002";
 pub const VENDOR_PACIFIC: &str = "aa000000-0000-0000-0000-000000000003";
 
-pub const MAT_STEEL: &str   = "bb000000-0000-0000-0000-000000000001"; // MAT-1000
-pub const MAT_BOLT: &str    = "bb000000-0000-0000-0000-000000000002"; // MAT-1001
-pub const MAT_PUMP: &str    = "bb000000-0000-0000-0000-000000000003"; // MAT-2000
+pub const MAT_STEEL: &str = "bb000000-0000-0000-0000-000000000001"; // MAT-1000
+pub const MAT_BOLT: &str = "bb000000-0000-0000-0000-000000000002"; // MAT-1001
+pub const MAT_PUMP: &str = "bb000000-0000-0000-0000-000000000003"; // MAT-2000
 pub const MAT_CONTROL: &str = "bb000000-0000-0000-0000-000000000004"; // MAT-3000
-pub const MAT_INACT: &str   = "bb000000-0000-0000-0000-000000000005"; // MAT-INACT (deleted_at set)
+pub const MAT_INACT: &str = "bb000000-0000-0000-0000-000000000005"; // MAT-INACT (deleted_at set)
 
 // ── ES test index names ───────────────────────────────────────────────────────
 
-pub const IDX_MATERIAL: &str      = "test_mm_material";
-pub const IDX_PLANT: &str         = "test_mm_plant_data";
-pub const IDX_STOCK: &str         = "test_mm_stock";
-pub const IDX_VENDOR: &str        = "test_mm_vendor";
-pub const IDX_PURCH_INFO: &str    = "test_mm_purchasing_info";
-pub const IDX_MATERIAL_DOC: &str  = "test_mm_material_doc";
+pub const IDX_MATERIAL: &str = "test_mm_material";
+pub const IDX_PLANT: &str = "test_mm_plant_data";
+pub const IDX_STOCK: &str = "test_mm_stock";
+pub const IDX_VENDOR: &str = "test_mm_vendor";
+pub const IDX_PURCH_INFO: &str = "test_mm_purchasing_info";
+pub const IDX_MATERIAL_DOC: &str = "test_mm_material_doc";
 
 // ── Postgres helpers ──────────────────────────────────────────────────────────
 
@@ -47,7 +47,9 @@ pub async fn pg_pool() -> Result<PgPool> {
 
 /// Re-seed all MM tables to a clean, deterministic state.
 pub async fn reseed(pool: &PgPool) -> Result<()> {
-    sqlx::query("CALL seed_mm_test_data()").execute(pool).await?;
+    sqlx::query("CALL seed_mm_test_data()")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -144,7 +146,7 @@ where
 pub async fn gql(query: &str, variables: Option<Value>) -> Result<Value> {
     let body = match variables {
         Some(v) => serde_json::json!({ "query": query, "variables": v }),
-        None    => serde_json::json!({ "query": query }),
+        None => serde_json::json!({ "query": query }),
     };
     let resp = http().post(GQL_URL).json(&body).send().await?;
     Ok(resp.json().await?)
