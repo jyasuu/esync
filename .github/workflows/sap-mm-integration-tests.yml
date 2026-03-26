@@ -1,0 +1,164 @@
+name: SAP MM Integration Tests
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'src/**'
+      - 'examples/sap-mm/**'
+      - 'tests/sap_mm/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/sap-mm-integration-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'examples/sap-mm/**'
+      - 'tests/sap_mm/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/sap-mm-integration-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  ESYNC_CONFIG: examples/sap-mm/esync-sap-mm.test.yaml
+  ESYNC_LOG: warn
+
+jobs:
+  # ── Unit tests — no infra needed ────────────────────────────────────────────
+  unit:
+    name: Lint & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Format check
+        run: cargo fmt -- --check
+
+      - name: Mapping unit tests (no infra)
+        run: cargo test --test test_mapping -- --nocapture
+
+  # ── SAP MM integration tests — Postgres + ES required ───────────────────────
+  sap-mm-integration:
+    name: SAP MM Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: esync
+          POSTGRES_PASSWORD: esync
+          POSTGRES_DB: esync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install psql client
+        run: sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # ── Database setup ────────────────────────────────────────────────────
+      - name: Create MM test database
+        env:
+          PGPASSWORD: esync
+        run: |
+          psql -h localhost -U esync -d postgres \
+            -c "CREATE DATABASE esync_mm_test;"
+          psql -h localhost -U esync -d esync_mm_test \
+            -f examples/sap-mm/scripts/setup_test_db.sql
+
+      # ── Wait for Elasticsearch ────────────────────────────────────────────
+      - name: Wait for Elasticsearch
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:9200/_cluster/health \
+              | grep -v '"status":"red"' && break || sleep 2
+          done
+
+      # ── Clean any leftover test indices ───────────────────────────────────
+      - name: Clean stale test indices
+        run: |
+          for idx in \
+            test_mm_material test_mm_plant_data test_mm_stock \
+            test_mm_vendor test_mm_purchasing_info test_mm_material_doc; do
+            curl -sf -X DELETE "http://localhost:9200/${idx}" || true
+          done
+
+      # ── Run test suites ───────────────────────────────────────────────────
+      # Each suite is run separately for clear per-suite pass/fail reporting.
+      # `serial_test` ensures tests within each suite don't race each other;
+      # running suites sequentially avoids cross-suite ES index collisions.
+
+      - name: Index tests (bulk rebuild, all entities)
+        run: cargo test --test test_mm_index -- --nocapture
+
+      - name: GraphQL tests (list, get, relations)
+        run: cargo test --test test_mm_graphql -- --nocapture
+
+      - name: CDC watch tests (insert, update, delete)
+        run: cargo test --test test_mm_cdc -- --nocapture
+
+      - name: Search tests (ES-backed full-text)
+        run: cargo test --test test_mm_search -- --nocapture
+
+      # ── Upload logs on failure ────────────────────────────────────────────
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sap-mm-test-logs
+          path: |
+            *.log
+            /tmp/esync-*.log

@@ -87,5 +87,22 @@ futures    = "0.3"
 tokio-stream = "0.1"
 bytes      = "1"
 
+# ── SAP MM integration test targets ──────────────────────────────────────────
+[[test]]
+name = "test_mm_index"
+path = "tests/sap_mm/test_mm_index.rs"
+
+[[test]]
+name = "test_mm_graphql"
+path = "tests/sap_mm/test_mm_graphql.rs"
+
+[[test]]
+name = "test_mm_cdc"
+path = "tests/sap_mm/test_mm_cdc.rs"
+
+[[test]]
+name = "test_mm_search"
+path = "tests/sap_mm/test_mm_search.rs"
+
 [dev-dependencies]
 tokio-test  = "0.4"

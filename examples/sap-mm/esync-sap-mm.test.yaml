@@ -1,0 +1,347 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# esync — SAP MM integration test config
+# Points at esync_mm_test database; uses test-prefixed ES indices.
+# ─────────────────────────────────────────────────────────────────────────────
+
+postgres:
+  url: "postgres://esync:esync@localhost:5432/esync_mm_test"
+  pool_size: 5
+
+elasticsearch:
+  url: "http://localhost:9200"
+
+graphql:
+  host: "127.0.0.1"
+  port: 4002          # distinct port so it doesn't clash with the main test suite
+  playground: false
+
+entities:
+
+  - name: MaterialMaster
+    table: material_master
+    index: test_mm_material
+    id_column: id
+    notify_channel: mm_test_material_changes
+    filter: "deleted_at IS NULL"
+    batch_size: 100
+
+    search_text:
+      field: search_text
+      separator: " "
+      sources:
+        - column: description
+        - column: material_number
+        - column: material_group
+        - column: material_type
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: material_number
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: description
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: material_type
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: material_group
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: base_unit
+        pg_type: TEXT
+      - name: gross_weight
+        pg_type: NUMERIC
+      - name: net_weight
+        pg_type: NUMERIC
+      - name: weight_unit
+        pg_type: TEXT
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: plant_views
+        kind: has_many
+        target: PlantData
+        local_col: id
+        foreign_col: material_id
+        order_by: plant ASC
+
+      - field: stock_levels
+        kind: has_many
+        target: StorageLocation
+        local_col: id
+        foreign_col: material_id
+        order_by: plant ASC, sloc ASC
+
+      - field: purchasing_infos
+        kind: has_many
+        target: PurchasingInfo
+        local_col: id
+        foreign_col: material_id
+        order_by: purchasing_org ASC
+
+      - field: movements
+        kind: has_many
+        target: MaterialDocument
+        local_col: id
+        foreign_col: material_id
+        order_by: posting_date DESC
+        limit: 50
+
+    search:
+      enabled: true
+      fields:
+        - field: search_text^2
+        - field: material_number.keyword^5
+        - field: description^2
+        - field: material_group
+        - field: material_type
+      highlight:
+        - description
+        - material_number
+      enrich:
+        - plant_views
+        - stock_levels
+
+  - name: PlantData
+    table: plant_data
+    index: test_mm_plant_data
+    id_column: id
+    batch_size: 100
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: material_id
+        pg_type: UUID
+      - name: plant
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: mrp_type
+        pg_type: TEXT
+      - name: reorder_point
+        pg_type: NUMERIC
+      - name: safety_stock
+        pg_type: NUMERIC
+      - name: planned_delivery
+        pg_type: INT4
+      - name: purchasing_group
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: valuation_class
+        pg_type: TEXT
+      - name: standard_price
+        pg_type: NUMERIC
+      - name: price_control
+        pg_type: TEXT
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: material
+        kind: belongs_to
+        target: MaterialMaster
+        local_col: material_id
+        foreign_col: id
+
+  - name: StorageLocation
+    table: storage_location
+    index: test_mm_stock
+    id_column: id
+    batch_size: 100
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: material_id
+        pg_type: UUID
+      - name: plant
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: sloc
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: unrestricted_stock
+        pg_type: NUMERIC
+      - name: quality_stock
+        pg_type: NUMERIC
+      - name: blocked_stock
+        pg_type: NUMERIC
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: material
+        kind: belongs_to
+        target: MaterialMaster
+        local_col: material_id
+        foreign_col: id
+
+  - name: VendorMaster
+    table: vendor_master
+    index: test_mm_vendor
+    id_column: id
+    notify_channel: mm_test_vendor_changes
+    filter: "deleted_at IS NULL"
+    batch_size: 100
+
+    search_text:
+      field: search_text
+      separator: " "
+      sources:
+        - column: vendor_number
+        - column: name
+        - column: search_term
+        - column: city
+        - column: country
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: vendor_number
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: name
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: search_term
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: city
+        pg_type: TEXT
+      - name: country
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: currency
+        pg_type: TEXT
+      - name: payment_terms
+        pg_type: TEXT
+      - name: account_group
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: purchasing_infos
+        kind: has_many
+        target: PurchasingInfo
+        local_col: id
+        foreign_col: vendor_id
+        order_by: purchasing_org ASC
+
+    search:
+      enabled: true
+      fields:
+        - field: search_text^2
+        - field: vendor_number.keyword^5
+        - field: name^3
+        - field: search_term^2
+        - field: city
+        - field: country
+      highlight:
+        - name
+        - vendor_number
+
+  - name: PurchasingInfo
+    table: purchasing_info
+    index: test_mm_purchasing_info
+    id_column: id
+    batch_size: 100
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: material_id
+        pg_type: UUID
+      - name: vendor_id
+        pg_type: UUID
+      - name: plant
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: purchasing_org
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: net_price
+        pg_type: NUMERIC
+      - name: currency
+        pg_type: TEXT
+      - name: planned_delivery
+        pg_type: INT4
+      - name: minimum_qty
+        pg_type: NUMERIC
+      - name: valid_from
+        pg_type: DATE
+      - name: valid_to
+        pg_type: DATE
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: material
+        kind: belongs_to
+        target: MaterialMaster
+        local_col: material_id
+        foreign_col: id
+      - field: vendor
+        kind: belongs_to
+        target: VendorMaster
+        local_col: vendor_id
+        foreign_col: id
+
+  - name: MaterialDocument
+    table: material_document
+    index: test_mm_material_doc
+    id_column: id
+    batch_size: 100
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: doc_number
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: doc_year
+        pg_type: TEXT
+      - name: line_item
+        pg_type: INT4
+      - name: material_id
+        pg_type: UUID
+      - name: plant
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: sloc
+        pg_type: TEXT
+      - name: movement_type
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: quantity
+        pg_type: NUMERIC
+      - name: unit
+        pg_type: TEXT
+      - name: posting_date
+        pg_type: DATE
+      - name: vendor_id
+        pg_type: UUID
+      - name: purchase_order
+        pg_type: TEXT
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: material
+        kind: belongs_to
+        target: MaterialMaster
+        local_col: material_id
+        foreign_col: id
+      - field: vendor
+        kind: belongs_to
+        target: VendorMaster
+        local_col: vendor_id
+        foreign_col: id
