@@ -59,9 +59,10 @@ services:
     build:
       context: ../..       # points at the esync project root (where Cargo.toml lives)
       dockerfile: Dockerfile
-    command: ["serve", "--config", "/app/esync-sap-mm.yaml"]
+    command: ["serve"]
     environment:
-      ESYNC_LOG: info
+      ESYNC_CONFIG: /app/esync-sap-mm.yaml
+      ESYNC_LOG: debug
     volumes:
       - ./esync-sap-mm.yaml:/app/esync-sap-mm.yaml:ro
     ports:
@@ -75,11 +76,12 @@ services:
   # One-shot bulk indexer — runs once, exits 0
   esync-index:
     build:
-      context: ..
+      context: ../..
       dockerfile: Dockerfile
-    command: ["index", "--config", "/app/esync-sap-mm.yaml"]
+    command: ["index"]
     environment:
-      ESYNC_LOG: info
+      ESYNC_CONFIG: /app/esync-sap-mm.yaml
+      ESYNC_LOG: debug
     volumes:
       - ./esync-sap-mm.yaml:/app/esync-sap-mm.yaml:ro
     depends_on:
@@ -93,11 +95,12 @@ services:
   # CDC daemon — watches for changes, upserts/deletes in ES
   esync-watch:
     build:
-      context: ..
+      context: ../..
       dockerfile: Dockerfile
-    command: ["watch", "--config", "/app/esync-sap-mm.yaml"]
+    command: ["watch"]
     environment:
-      ESYNC_LOG: info
+      ESYNC_CONFIG: /app/esync-sap-mm.yaml
+      ESYNC_LOG: debug
     volumes:
       - ./esync-sap-mm.yaml:/app/esync-sap-mm.yaml:ro
     depends_on:

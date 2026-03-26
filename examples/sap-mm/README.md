@@ -86,7 +86,7 @@ Open **http://localhost:4000/graphql** (GraphiQL playground).
 
 ```graphql
 query {
-  list_MaterialMaster(limit: 10) {
+  list_material_master(limit: 10) {
     id
     material_number
     description

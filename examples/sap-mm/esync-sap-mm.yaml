@@ -10,11 +10,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 postgres:
-  url: "postgres://esync:esync@localhost:5432/esync"
+  url: "postgres://esync:esync@postgres:5432/esync"
   pool_size: 10
 
 elasticsearch:
-  url: "http://localhost:9200"
+  url: "http://elasticsearch:9200"
   # username: elastic
   # password: changeme
 
