@@ -1,5 +1,5 @@
-/// tests/sap_mm/common.rs
-/// Shared helpers for the SAP MM integration test suite.
+//! tests/sap_mm/common.rs
+//! Shared helpers for the SAP MM integration test suite.
 #![allow(dead_code)]
 
 use anyhow::Result;
