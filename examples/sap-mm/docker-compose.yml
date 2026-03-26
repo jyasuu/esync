@@ -57,7 +57,7 @@ services:
   # GraphQL server — live read path over Postgres
   esync-serve:
     build:
-      context: ..       # points at the esync project root (where Cargo.toml lives)
+      context: ../..       # points at the esync project root (where Cargo.toml lives)
       dockerfile: Dockerfile
     command: ["serve", "--config", "/app/esync-sap-mm.yaml"]
     environment:
