@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: esync
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux x86_64 (musl static) ─────────────────────────────────────
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+            artifact: esync-linux-x86_64
+
+          # ── Linux aarch64 (musl static) ────────────────────────────────────
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+            artifact: esync-linux-aarch64
+
+          # ── macOS x86_64 ───────────────────────────────────────────────────
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+            artifact: esync-macos-x86_64
+
+          # ── macOS Apple Silicon ────────────────────────────────────────────
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+            artifact: esync-macos-aarch64
+
+          # ── Windows x86_64 ─────────────────────────────────────────────────
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
+            artifact: esync-windows-x86_64
+            ext: .exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # cross handles musl cross-compilation via Docker
+      - name: Install cross (Linux musl targets)
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (cargo)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # ── Stage binary ──────────────────────────────────────────────────────
+      - name: Stage binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ env.BIN_NAME }} \
+             dist/${{ matrix.artifact }}
+          chmod +x dist/${{ matrix.artifact }}
+
+      - name: Stage binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\${{ env.BIN_NAME }}.exe" `
+                    "dist\${{ matrix.artifact }}.exe"
+
+      # ── Checksum ──────────────────────────────────────────────────────────
+      - name: SHA-256 checksum (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd dist
+          sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+
+      - name: SHA-256 checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $f = "dist\${{ matrix.artifact }}.exe"
+          $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.artifact }}.exe" | `
+            Out-File -Encoding ASCII "dist\${{ matrix.artifact }}.exe.sha256"
+
+      # ── Upload to release ─────────────────────────────────────────────────
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

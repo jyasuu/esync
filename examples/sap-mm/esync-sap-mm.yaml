@@ -1,0 +1,451 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# esync configuration — SAP MM (Material Management) example
+#
+# Covers: Material Master, Plant Data, Storage Location,
+#         Vendor Master, Purchasing Info, Material Documents.
+#
+# To add another SAP module (e.g. SD, FI, HR) — append new entries under
+# `entities:` with their own tables, columns, relations, and notify channels.
+# No Rust code changes are needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+postgres:
+  url: "postgres://esync:esync@localhost:5432/esync"
+  pool_size: 10
+
+elasticsearch:
+  url: "http://localhost:9200"
+  # username: elastic
+  # password: changeme
+
+graphql:
+  host: "0.0.0.0"
+  port: 4000
+  playground: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entities — one entry per synced table.
+#
+# Each entity results in:
+#   • GraphQL:  list_<name>, get_<name>, (optionally) search_<name>
+#   • ES index: as defined in `index:`
+#   • CDC:      LISTEN on the `notify_channel` produced by the SQL trigger
+# ─────────────────────────────────────────────────────────────────────────────
+
+entities:
+
+  # ── Material Master ────────────────────────────────────────────────────────
+  # Equivalent to SAP tables: MARA (general data) + MAKT (descriptions)
+  - name: MaterialMaster
+    table: material_master
+    index: sap_mm_material
+    id_column: id
+    notify_channel: mm_material_changes
+    filter: "deleted_at IS NULL"
+    batch_size: 500
+
+    # Full-text field: merges description, material_number, group, and type.
+    # Stored in ES for fast keyword search without a DB round-trip.
+    search_text:
+      field: search_text
+      separator: " "
+      sources:
+        - column: description
+        - column: material_number
+        - column: material_group
+        - column: material_type
+        # Pull vendor names through: material → purchasing_info → vendor
+        - relation: purchasing_infos
+          columns: [vendor_material_no]
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: material_number
+        pg_type: TEXT
+        keyword_subfield: true          # adds .keyword sub-field in ES for exact match
+      - name: description
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: material_type
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: material_group
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: base_unit
+        pg_type: TEXT
+      - name: gross_weight
+        pg_type: NUMERIC
+      - name: net_weight
+        pg_type: NUMERIC
+      - name: weight_unit
+        pg_type: TEXT
+      - name: volume
+        pg_type: NUMERIC
+      - name: volume_unit
+        pg_type: TEXT
+      - name: ean_upc
+        pg_type: TEXT
+      - name: hazardous_material
+        pg_type: TEXT
+      - name: created_by
+        pg_type: TEXT
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      # Plant-level data (one per plant)
+      - field: plant_views
+        kind: has_many
+        target: PlantData
+        local_col: id
+        foreign_col: material_id
+        order_by: plant ASC
+
+      # Stock per storage location
+      - field: stock_levels
+        kind: has_many
+        target: StorageLocation
+        local_col: id
+        foreign_col: material_id
+        order_by: plant ASC, sloc ASC
+
+      # Vendor purchasing conditions
+      - field: purchasing_infos
+        kind: has_many
+        target: PurchasingInfo
+        local_col: id
+        foreign_col: material_id
+        order_by: purchasing_org ASC
+
+      # Goods movement history (latest 50)
+      - field: movements
+        kind: has_many
+        target: MaterialDocument
+        local_col: id
+        foreign_col: material_id
+        order_by: posting_date DESC
+        limit: 50
+
+    # Enable ES-backed full-text search via GraphQL `search_MaterialMaster` query
+    search:
+      enabled: true
+      fields:
+        - field: search_text^3
+        - field: material_number.keyword^5
+        - field: description^2
+        - field: material_group
+        - field: material_type
+      highlight:
+        - description
+        - material_number
+      enrich:
+        - plant_views
+        - stock_levels
+
+
+  # ── Plant Data ─────────────────────────────────────────────────────────────
+  # Equivalent to SAP table: MARC
+  - name: PlantData
+    table: plant_data
+    index: sap_mm_plant_data
+    id_column: id
+    notify_channel: mm_plant_changes
+    batch_size: 1000
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: material_id
+        pg_type: UUID
+      - name: plant
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: mrp_type
+        pg_type: TEXT
+      - name: mrp_controller
+        pg_type: TEXT
+      - name: reorder_point
+        pg_type: NUMERIC
+      - name: safety_stock
+        pg_type: NUMERIC
+      - name: lot_size
+        pg_type: TEXT
+      - name: planned_delivery
+        pg_type: INT4
+      - name: purchasing_group
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: profit_center
+        pg_type: TEXT
+      - name: valuation_class
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: standard_price
+        pg_type: NUMERIC
+      - name: moving_avg_price
+        pg_type: NUMERIC
+      - name: price_control
+        pg_type: TEXT
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: material
+        kind: belongs_to
+        target: MaterialMaster
+        local_col: material_id
+        foreign_col: id
+
+
+  # ── Storage Location (Stock on Hand) ──────────────────────────────────────
+  # Equivalent to SAP table: MARD
+  - name: StorageLocation
+    table: storage_location
+    index: sap_mm_stock
+    id_column: id
+    notify_channel: mm_stock_changes
+    batch_size: 2000
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: material_id
+        pg_type: UUID
+      - name: plant
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: sloc
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: unrestricted_stock
+        pg_type: NUMERIC
+      - name: quality_stock
+        pg_type: NUMERIC
+      - name: blocked_stock
+        pg_type: NUMERIC
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: material
+        kind: belongs_to
+        target: MaterialMaster
+        local_col: material_id
+        foreign_col: id
+
+
+  # ── Vendor Master ──────────────────────────────────────────────────────────
+  # Equivalent to SAP tables: LFA1 (general) + LFB1 (company code)
+  - name: VendorMaster
+    table: vendor_master
+    index: sap_mm_vendor
+    id_column: id
+    notify_channel: mm_vendor_changes
+    filter: "deleted_at IS NULL"
+    batch_size: 500
+
+    search_text:
+      field: search_text
+      separator: " "
+      sources:
+        - column: vendor_number
+        - column: name
+        - column: name2
+        - column: search_term
+        - column: city
+        - column: country
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: vendor_number
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: name
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: name2
+        pg_type: TEXT
+      - name: search_term
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: street
+        pg_type: TEXT
+      - name: city
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: postal_code
+        pg_type: TEXT
+      - name: country
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: region
+        pg_type: TEXT
+      - name: language
+        pg_type: TEXT
+      - name: phone
+        pg_type: TEXT
+      - name: email
+        pg_type: TEXT
+      - name: tax_number
+        pg_type: TEXT
+      - name: payment_terms
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: account_group
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: currency
+        pg_type: TEXT
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      # Purchasing conditions for this vendor
+      - field: purchasing_infos
+        kind: has_many
+        target: PurchasingInfo
+        local_col: id
+        foreign_col: vendor_id
+        order_by: purchasing_org ASC
+
+    search:
+      enabled: true
+      fields:
+        - field: search_text^2
+        - field: vendor_number.keyword^5
+        - field: name^3
+        - field: search_term^2
+        - field: city
+        - field: country
+      highlight:
+        - name
+        - vendor_number
+
+
+  # ── Purchasing Info Record ─────────────────────────────────────────────────
+  # Equivalent to SAP tables: EINA (general) + EINE (purchasing-org data)
+  - name: PurchasingInfo
+    table: purchasing_info
+    index: sap_mm_purchasing_info
+    id_column: id
+    notify_channel: mm_purchinfo_changes
+    batch_size: 1000
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: material_id
+        pg_type: UUID
+      - name: vendor_id
+        pg_type: UUID
+      - name: plant
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: purchasing_org
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: net_price
+        pg_type: NUMERIC
+      - name: price_unit
+        pg_type: NUMERIC
+      - name: currency
+        pg_type: TEXT
+      - name: vendor_material_no
+        pg_type: TEXT
+      - name: planned_delivery
+        pg_type: INT4
+      - name: minimum_qty
+        pg_type: NUMERIC
+      - name: valid_from
+        pg_type: DATE
+      - name: valid_to
+        pg_type: DATE
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+      - name: updated_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: material
+        kind: belongs_to
+        target: MaterialMaster
+        local_col: material_id
+        foreign_col: id
+      - field: vendor
+        kind: belongs_to
+        target: VendorMaster
+        local_col: vendor_id
+        foreign_col: id
+
+
+  # ── Material Document (Goods Movements) ───────────────────────────────────
+  # Equivalent to SAP tables: MKPF (header) + MSEG (items)
+  - name: MaterialDocument
+    table: material_document
+    index: sap_mm_material_doc
+    id_column: id
+    notify_channel: mm_movedoc_changes
+    batch_size: 1000
+
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: doc_number
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: doc_year
+        pg_type: TEXT
+      - name: line_item
+        pg_type: INT4
+      - name: material_id
+        pg_type: UUID
+      - name: plant
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: sloc
+        pg_type: TEXT
+      - name: movement_type
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: quantity
+        pg_type: NUMERIC
+      - name: unit
+        pg_type: TEXT
+      - name: posting_date
+        pg_type: DATE
+      - name: document_date
+        pg_type: DATE
+      - name: reference
+        pg_type: TEXT
+      - name: vendor_id
+        pg_type: UUID
+      - name: purchase_order
+        pg_type: TEXT
+        keyword_subfield: true
+      - name: po_line
+        pg_type: INT4
+      - name: created_by
+        pg_type: TEXT
+      - name: created_at
+        pg_type: TIMESTAMPTZ
+
+    relations:
+      - field: material
+        kind: belongs_to
+        target: MaterialMaster
+        local_col: material_id
+        foreign_col: id
+      - field: vendor
+        kind: belongs_to
+        target: VendorMaster
+        local_col: vendor_id
+        foreign_col: id
