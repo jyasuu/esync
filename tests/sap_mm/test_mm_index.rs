@@ -98,17 +98,17 @@ async fn test_mm_index_deleted_material_excluded() -> Result<()> {
     let (pool, es, cfg) = setup().await?;
     let entity = cfg.entity("MaterialMaster").unwrap();
 
-    // Soft-delete MAT-INACT
-    sqlx::query("UPDATE material_master SET deleted_at = NOW() WHERE id = $1")
-        .bind(uuid::Uuid::parse_str(MAT_INACT)?)
-        .execute(&pool)
-        .await?;
-
+    // MAT-INACT is pre-soft-deleted in seed_mm_test_data (deleted_at IS NOT NULL)
+    // — no extra UPDATE needed; just rebuild and confirm it's absent from ES.
     indexer::rebuild_index(&pool, &es, entity, &cfg).await?;
     es_refresh(IDX_MATERIAL).await?;
 
     let doc = es_get(IDX_MATERIAL, MAT_INACT).await?;
     assert!(doc.is_none(), "Soft-deleted material must not appear in ES");
+
+    // Sanity: the other 4 are present
+    let count = es_count(IDX_MATERIAL).await?;
+    assert_eq!(count, 4, "Exactly 4 active materials expected");
 
     Ok(())
 }

@@ -184,14 +184,14 @@ BEGIN
         ('aa000000-0000-0000-0000-000000000002', 'V000002', 'GlobalParts GmbH',     'GLOBALP', 'Stuttgart', 'DE', 'EUR', 'Z014', 'LIEF'),
         ('aa000000-0000-0000-0000-000000000003', 'V000003', 'Pacific Plastics Ltd', 'PACPLAS', 'Seattle',   'US', 'USD', 'N030', 'LIEF');
 
-    -- Materials
-    INSERT INTO material_master (id, material_number, description, material_type, material_group, base_unit, gross_weight, net_weight, weight_unit)
+    -- Materials (MAT-INACT is pre-soft-deleted so deleted_at IS NULL filter excludes it)
+    INSERT INTO material_master (id, material_number, description, material_type, material_group, base_unit, gross_weight, net_weight, weight_unit, deleted_at)
     VALUES
-        ('bb000000-0000-0000-0000-000000000001', 'MAT-1000', 'Carbon Steel Sheet 3mm',  'ROH',  'MG-STEEL',   'EA', 25.000, 24.500, 'KG'),
-        ('bb000000-0000-0000-0000-000000000002', 'MAT-1001', 'Stainless Bolt M8x30',    'ROH',  'MG-FASTENER','PC',  0.020,  0.018, 'KG'),
-        ('bb000000-0000-0000-0000-000000000003', 'MAT-2000', 'Hydraulic Pump Assembly', 'HALB', 'MG-PUMP',    'EA', 12.500, 11.200, 'KG'),
-        ('bb000000-0000-0000-0000-000000000004', 'MAT-3000', 'Industrial Control Unit', 'FERT', 'MG-ELECTRO', 'EA',  5.000,  4.200, 'KG'),
-        ('bb000000-0000-0000-0000-000000000005', 'MAT-INACT','Obsolete Part',           'ROH',  'MG-STEEL',   'EA',  1.000,  0.900, 'KG');
+        ('bb000000-0000-0000-0000-000000000001', 'MAT-1000', 'Carbon Steel Sheet 3mm',  'ROH',  'MG-STEEL',   'EA', 25.000, 24.500, 'KG', NULL),
+        ('bb000000-0000-0000-0000-000000000002', 'MAT-1001', 'Stainless Bolt M8x30',    'ROH',  'MG-FASTENER','PC',  0.020,  0.018, 'KG', NULL),
+        ('bb000000-0000-0000-0000-000000000003', 'MAT-2000', 'Hydraulic Pump Assembly', 'HALB', 'MG-PUMP',    'EA', 12.500, 11.200, 'KG', NULL),
+        ('bb000000-0000-0000-0000-000000000004', 'MAT-3000', 'Industrial Control Unit', 'FERT', 'MG-ELECTRO', 'EA',  5.000,  4.200, 'KG', NULL),
+        ('bb000000-0000-0000-0000-000000000005', 'MAT-INACT','Obsolete Part',           'ROH',  'MG-STEEL',   'EA',  1.000,  0.900, 'KG', '2024-01-01T00:00:00Z');
 
     -- Plant data
     INSERT INTO plant_data (material_id, plant, mrp_type, reorder_point, safety_stock, planned_delivery, purchasing_group, valuation_class, standard_price, price_control)
