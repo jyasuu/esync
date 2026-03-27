@@ -1,5 +1,5 @@
 /// tests/sap_mm/test_mm_search.rs
-/// Integration tests for ES-backed `search_MaterialMaster` and `search_VendorMaster`
+/// Integration tests for ES-backed `search_material_master` and `search_vendor_master`
 /// GraphQL queries in the SAP MM schema.
 mod common;
 use common::*;
@@ -52,7 +52,7 @@ async fn setup() -> Result<(JoinHandle<()>, sqlx::PgPool, EsClient, Config)> {
     Ok((server, pool, es, cfg))
 }
 
-// ── search_MaterialMaster ─────────────────────────────────────────────────────
+// ── search_material_master ─────────────────────────────────────────────────────
 
 #[tokio::test]
 #[serial]
@@ -60,7 +60,7 @@ async fn test_mm_search_material_by_description() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_MaterialMaster(query: "hydraulic", limit: 5) {
+        r#"{ search_material_master(query: "hydraulic", limit: 5) {
             hits { id material_number description }
             total
         } }"#,
@@ -69,7 +69,7 @@ async fn test_mm_search_material_by_description() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+    let hits = resp["data"]["search_material_master"]["hits"]
         .as_array()
         .unwrap();
     assert!(
@@ -92,7 +92,7 @@ async fn test_mm_search_material_by_material_number() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_MaterialMaster(query: "MAT-1000", limit: 5) {
+        r#"{ search_material_master(query: "MAT-1000", limit: 5) {
             hits { id material_number description }
             total
         } }"#,
@@ -101,7 +101,7 @@ async fn test_mm_search_material_by_material_number() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+    let hits = resp["data"]["search_material_master"]["hits"]
         .as_array()
         .unwrap();
     assert!(
@@ -121,7 +121,7 @@ async fn test_mm_search_material_by_group() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_MaterialMaster(query: "MG-STEEL", limit: 10) {
+        r#"{ search_material_master(query: "MG-STEEL", limit: 10) {
             hits { id material_number material_group }
             total
         } }"#,
@@ -130,7 +130,7 @@ async fn test_mm_search_material_by_group() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+    let hits = resp["data"]["search_material_master"]["hits"]
         .as_array()
         .unwrap();
     assert!(
@@ -149,7 +149,7 @@ async fn test_mm_search_material_with_enriched_stock() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_MaterialMaster(query: "steel sheet", limit: 5) {
+        r#"{ search_material_master(query: "steel sheet", limit: 5) {
             hits {
                 material_number
                 stock_levels { plant sloc unrestricted_stock }
@@ -160,7 +160,7 @@ async fn test_mm_search_material_with_enriched_stock() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+    let hits = resp["data"]["search_material_master"]["hits"]
         .as_array()
         .unwrap();
     assert!(!hits.is_empty(), "steel sheet search should return results");
@@ -187,7 +187,7 @@ async fn test_mm_search_material_with_enriched_plant_views() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_MaterialMaster(query: "bolt", limit: 5) {
+        r#"{ search_material_master(query: "bolt", limit: 5) {
             hits {
                 material_number
                 plant_views { plant standard_price reorder_point }
@@ -198,7 +198,7 @@ async fn test_mm_search_material_with_enriched_plant_views() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+    let hits = resp["data"]["search_material_master"]["hits"]
         .as_array()
         .unwrap();
     let bolt = hits.iter().find(|h| h["material_number"] == "MAT-1001");
@@ -224,7 +224,7 @@ async fn test_mm_search_material_no_results_for_garbage() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_MaterialMaster(query: "xyzzy_nonexistent_zzz", limit: 5) {
+        r#"{ search_material_master(query: "xyzzy_nonexistent_zzz", limit: 5) {
             hits { id }
             total
         } }"#,
@@ -233,7 +233,7 @@ async fn test_mm_search_material_no_results_for_garbage() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let total = resp["data"]["search_MaterialMaster"]["total"]
+    let total = resp["data"]["search_material_master"]["total"]
         .as_u64()
         .unwrap_or(0);
     assert_eq!(total, 0, "Nonsense query should return zero results");
@@ -249,7 +249,7 @@ async fn test_mm_search_material_limit_respected() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_MaterialMaster(query: "ROH", limit: 1) {
+        r#"{ search_material_master(query: "ROH", limit: 1) {
             hits { id material_type }
             total
         } }"#,
@@ -258,12 +258,12 @@ async fn test_mm_search_material_limit_respected() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_MaterialMaster"]["hits"]
+    let hits = resp["data"]["search_material_master"]["hits"]
         .as_array()
         .unwrap();
     assert_eq!(hits.len(), 1, "limit: 1 must return exactly 1 result");
 
-    let total = resp["data"]["search_MaterialMaster"]["total"]
+    let total = resp["data"]["search_material_master"]["total"]
         .as_u64()
         .unwrap_or(0);
     assert!(
@@ -276,7 +276,7 @@ async fn test_mm_search_material_limit_respected() -> Result<()> {
     Ok(())
 }
 
-// ── search_VendorMaster ───────────────────────────────────────────────────────
+// ── search_vendor_master ───────────────────────────────────────────────────────
 
 #[tokio::test]
 #[serial]
@@ -284,7 +284,7 @@ async fn test_mm_search_vendor_by_name() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_VendorMaster(query: "Acme", limit: 5) {
+        r#"{ search_vendor_master(query: "Acme", limit: 5) {
             hits { id vendor_number name country }
             total
         } }"#,
@@ -293,7 +293,7 @@ async fn test_mm_search_vendor_by_name() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_VendorMaster"]["hits"]
+    let hits = resp["data"]["search_vendor_master"]["hits"]
         .as_array()
         .unwrap();
     assert!(!hits.is_empty(), "Should find Acme by name");
@@ -311,7 +311,7 @@ async fn test_mm_search_vendor_by_vendor_number() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_VendorMaster(query: "V000002", limit: 5) {
+        r#"{ search_vendor_master(query: "V000002", limit: 5) {
             hits { vendor_number name }
         } }"#,
         None,
@@ -319,7 +319,7 @@ async fn test_mm_search_vendor_by_vendor_number() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_VendorMaster"]["hits"]
+    let hits = resp["data"]["search_vendor_master"]["hits"]
         .as_array()
         .unwrap();
     assert!(!hits.is_empty(), "Should find GlobalParts by vendor number");
@@ -336,7 +336,7 @@ async fn test_mm_search_vendor_by_city() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_VendorMaster(query: "Stuttgart", limit: 5) {
+        r#"{ search_vendor_master(query: "Stuttgart", limit: 5) {
             hits { vendor_number name city }
         } }"#,
         None,
@@ -344,7 +344,7 @@ async fn test_mm_search_vendor_by_city() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_VendorMaster"]["hits"]
+    let hits = resp["data"]["search_vendor_master"]["hits"]
         .as_array()
         .unwrap();
     assert!(
@@ -366,7 +366,7 @@ async fn test_mm_search_vendor_with_highlights() -> Result<()> {
     let (srv, _pool, _es, _cfg) = setup().await?;
 
     let resp = gql(
-        r#"{ search_VendorMaster(query: "Pacific", limit: 5) {
+        r#"{ search_vendor_master(query: "Pacific", limit: 5) {
             hits { vendor_number name }
             highlights { field snippets }
         } }"#,
@@ -375,13 +375,13 @@ async fn test_mm_search_vendor_with_highlights() -> Result<()> {
     .await?;
     assert_no_gql_errors(&resp);
 
-    let hits = resp["data"]["search_VendorMaster"]["hits"]
+    let hits = resp["data"]["search_vendor_master"]["hits"]
         .as_array()
         .unwrap();
     assert!(!hits.is_empty(), "Should find Pacific Plastics");
 
     // Highlights should be populated when the query matches a configured field
-    let highlights = resp["data"]["search_VendorMaster"]["highlights"].as_array();
+    let highlights = resp["data"]["search_vendor_master"]["highlights"].as_array();
     if let Some(hl) = highlights {
         // Some ES versions don't return highlights on keyword-only matches,
         // so we only assert structure if highlights are present
