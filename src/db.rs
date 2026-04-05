@@ -11,18 +11,15 @@ pub async fn connect(url: &str, pool_size: u32) -> Result<PgPool> {
     Ok(pool)
 }
 
-/// Fetch a page of rows from `table` as column-name → JSON value maps.
+/// Fetch a page of rows from `source` (a table name or sub-select expression)
+/// as column-name → JSON value maps.
 ///
-/// Every column is cast to a canonical representation:
-/// - TIMESTAMPTZ / TIMESTAMP → ISO-8601 string via `AT TIME ZONE 'UTC'`
-/// - NUMERIC                 → plain text (ES scaled_float accepts "9.99")
-/// - Everything else         → TEXT cast
-///
-/// This avoids sqlx's type-guessing (which mis-decodes UUIDs as bool) and
-/// keeps the values in formats ES accepts through its mappings.
+/// Every column is cast to a canonical representation via `row_to_json` so
+/// Postgres handles type coercion natively (timestamps → ISO-8601, UUIDs →
+/// strings, booleans → booleans, nulls → null).
 pub async fn fetch_rows(
     pool: &PgPool,
-    table: &str,
+    source: &str,
     columns: &[&str],
     filter: Option<&str>,
     limit: i64,
@@ -30,17 +27,14 @@ pub async fn fetch_rows(
 ) -> Result<Vec<HashMap<String, serde_json::Value>>> {
     let where_clause = filter.map(|f| format!("WHERE {f}")).unwrap_or_default();
 
-    // Use to_json() so Postgres handles type coercion natively:
-    //   - timestamps become ISO-8601 strings with timezone
-    //   - numbers stay as JSON numbers (not strings)
-    //   - booleans stay as JSON booleans
-    //   - nulls become JSON null
-    //   - UUIDs become strings
-    // row_to_json wraps the whole row; we unwrap it per-column below.
-    let col_list = columns.join(", ");
+    let col_list = if columns.is_empty() {
+        "*".to_string()
+    } else {
+        columns.join(", ")
+    };
     let sql = format!(
         "SELECT row_to_json(t)::TEXT AS _row \
-         FROM (SELECT {col_list} FROM {table} {where_clause} ORDER BY 1 LIMIT {limit} OFFSET {offset}) t"
+         FROM (SELECT {col_list} FROM {source} {where_clause} ORDER BY 1 LIMIT {limit} OFFSET {offset}) t"
     );
 
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
@@ -54,12 +48,89 @@ pub async fn fetch_rows(
         .collect()
 }
 
-/// Count rows in `table` matching the optional filter.
-pub async fn count_rows(pool: &PgPool, table: &str, filter: Option<&str>) -> Result<i64> {
+/// Count rows in `source` (table name or sub-select) matching the optional filter.
+pub async fn count_rows(pool: &PgPool, source: &str, filter: Option<&str>) -> Result<i64> {
     let where_clause = filter.map(|f| format!("WHERE {f}")).unwrap_or_default();
-    let sql = format!("SELECT COUNT(*) FROM {table} {where_clause}");
+    let sql = format!("SELECT COUNT(*) FROM {source} {where_clause}");
     let (count,): (i64,) = sqlx::query_as(&sql).fetch_one(pool).await?;
     Ok(count)
+}
+
+// ── Write helpers (used by mutations) ────────────────────────────────────
+
+/// INSERT a row into `table` and return the inserted row as a JSON map.
+/// `fields` is a list of (column_name, sql_literal) pairs.
+pub async fn insert_row(
+    pool: &PgPool,
+    table: &str,
+    fields: &[(String, String)],
+    returning_cols: &[&str],
+) -> Result<HashMap<String, serde_json::Value>> {
+    if fields.is_empty() {
+        anyhow::bail!("insert_row: no fields provided");
+    }
+    let col_names: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+    let col_values: Vec<&str> = fields.iter().map(|(_, v)| v.as_str()).collect();
+    let ret_cols = if returning_cols.is_empty() {
+        "*".to_string()
+    } else {
+        returning_cols.join(", ")
+    };
+    // Use a CTE so we can wrap the RETURNING clause in row_to_json.
+    let sql = format!(
+        "WITH _ins AS (INSERT INTO {table} ({cols}) VALUES ({vals}) RETURNING {ret_cols}) \
+         SELECT row_to_json(_ins)::TEXT AS _row FROM _ins",
+        cols = col_names.join(", "),
+        vals = col_values.join(", "),
+    );
+    let row = sqlx::query(&sql).fetch_one(pool).await?;
+    let json_text: String = row.try_get("_row")?;
+    let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&json_text)?;
+    Ok(obj.into_iter().collect())
+}
+
+/// UPDATE a row in `table` and return the updated row.
+/// `fields` is a list of (column_name, sql_literal) pairs.
+pub async fn update_row(
+    pool: &PgPool,
+    table: &str,
+    id_col: &str,
+    id_val: &str,
+    fields: &[(String, String)],
+    returning_cols: &[&str],
+) -> Result<Option<HashMap<String, serde_json::Value>>> {
+    if fields.is_empty() {
+        anyhow::bail!("update_row: no fields provided");
+    }
+    let set_clause = fields
+        .iter()
+        .map(|(k, v)| format!("{k} = {v}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ret_cols = if returning_cols.is_empty() {
+        "*".to_string()
+    } else {
+        returning_cols.join(", ")
+    };
+    let sql = format!(
+        "WITH _upd AS (UPDATE {table} SET {set_clause} WHERE {id_col} = {id_val} RETURNING {ret_cols}) \
+         SELECT row_to_json(_upd)::TEXT AS _row FROM _upd"
+    );
+    let rows = sqlx::query(&sql).fetch_all(pool).await?;
+    if let Some(row) = rows.into_iter().next() {
+        let json_text: String = row.try_get("_row")?;
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&json_text)?;
+        Ok(Some(obj.into_iter().collect()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// DELETE a row from `table` by primary key. Returns true if a row was deleted.
+pub async fn delete_row(pool: &PgPool, table: &str, id_col: &str, id_val: &str) -> Result<bool> {
+    let sql = format!("DELETE FROM {table} WHERE {id_col} = {id_val}");
+    let result = sqlx::query(&sql).execute(pool).await?;
+    Ok(result.rows_affected() > 0)
 }
 
 /// Fetch rows by a list of id values — used for batch enrichment after ES search.

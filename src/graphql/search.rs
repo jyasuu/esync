@@ -320,7 +320,7 @@ fn build_search_field(
 
                 let live_rows = crate::db::fetch_by_ids(
                     &pool,
-                    &entity.table,
+                    &entity.source_sql(),
                     &entity.id_column,
                     &fetch_cols,
                     &ids,
@@ -375,7 +375,7 @@ fn build_search_field(
 
                         let fetched = crate::db::fetch_by_ids(
                             &pool,
-                            &target_entity.table,
+                            &target_entity.source_sql(),
                             &rel.foreign_col,
                             &target_cols,
                             &fk_vals,
@@ -659,7 +659,7 @@ async fn fetch_related_rows(
         "SELECT row_to_json(t)::TEXT AS _row \
          FROM (SELECT {col_list} FROM {} WHERE {filter} \
                ORDER BY {order} LIMIT {limit}) t",
-        target.table
+        target.source_sql()
     );
 
     let rows = sqlx::query(&sql).fetch_all(pool).await?;

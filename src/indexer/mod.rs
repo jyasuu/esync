@@ -21,7 +21,7 @@ pub async fn rebuild_index(
 ) -> Result<()> {
     let columns: Vec<&str> = entity.columns.iter().map(|c| c.name.as_str()).collect();
 
-    let total = db::count_rows(pool, &entity.table, entity.filter.as_deref()).await?;
+    let total = db::count_rows(pool, &entity.source_sql(), entity.filter.as_deref()).await?;
     tracing::info!(
         "Indexing {} rows from `{}` → `{}`",
         total,
@@ -46,7 +46,7 @@ pub async fn rebuild_index(
     loop {
         let rows = db::fetch_rows(
             pool,
-            &entity.table,
+            &entity.source_sql(),
             &columns,
             entity.filter.as_deref(),
             batch,
@@ -114,7 +114,7 @@ pub async fn build_search_text_for_id(
 
     let cols: Vec<&str> = entity.columns.iter().map(|c| c.name.as_str()).collect();
     let filter = format!("{} = '{}'", entity.id_column, id.replace('\'', "''"));
-    let mut rows = db::fetch_rows(pool, &entity.table, &cols, Some(&filter), 1, 0).await?;
+    let mut rows = db::fetch_rows(pool, &entity.source_sql(), &cols, Some(&filter), 1, 0).await?;
     let row = match rows.pop() {
         Some(r) => r,
         None => return Ok(None),

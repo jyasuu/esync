@@ -75,7 +75,7 @@ pub async fn run(cfg: Config, args: WatchArgs) -> Result<()> {
                                     format!("{} = '{}'", entity.id_column, id.replace('\'', "''"));
                                 let mut rows = db::fetch_rows(
                                     &pool,
-                                    &entity.table,
+                                    &entity.source_sql(),
                                     &cols,
                                     Some(&filter),
                                     1,

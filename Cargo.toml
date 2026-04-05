@@ -63,9 +63,9 @@ sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "uuid"
 
 # GraphQL server
 # async-graphql-axum 7.x pulls axum 0.8; pin axum to match exactly.
-async-graphql      = { version = "7", features = ["uuid", "chrono", "dynamic-schema"] }
+async-graphql      = { version = "7", features = ["uuid", "chrono", "dynamic-schema", "unblock"] }
 async-graphql-axum = "7"
-axum          = "0.8"
+axum          = { version = "0.8", features = ["ws"] }
 tower         = "0.5"
 tower-http    = { version = "0.6", features = ["cors", "trace"] }
 
@@ -84,7 +84,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 indicatif  = "0.17"
 colored    = "2"
 futures    = "0.3"
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 bytes      = "1"
 
 # ── SAP MM integration test targets ──────────────────────────────────────────

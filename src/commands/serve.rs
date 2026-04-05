@@ -1,7 +1,8 @@
+use crate::graphql::subscriptions::{spawn_cdc_listener, Broadcaster};
 use crate::{config::Config, db, elastic::EsClient, graphql};
 use anyhow::Result;
-use async_graphql::http::GraphiQLSource;
-use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use async_graphql::http::{GraphiQLSource, ALL_WEBSOCKET_PROTOCOLS};
+use async_graphql_axum::{GraphQLProtocol, GraphQLRequest, GraphQLResponse, GraphQLWebSocket};
 use axum::{
     extract::State,
     response::{Html, IntoResponse},
@@ -34,13 +35,37 @@ struct AppState {
 
 pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
     let pool = Arc::new(db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?);
-    // Only connect to ES if at least one entity has search.enabled
-    let es = if cfg.entities.iter().any(|e| e.search.enabled) {
+
+    // Connect to ES if any entity needs it
+    let needs_es = cfg
+        .entities
+        .iter()
+        .any(|e| e.search.enabled || !e.is_readonly());
+    let es = if needs_es {
         Arc::new(EsClient::new(&cfg.elasticsearch)?)
     } else {
         Arc::new(EsClient::new_noop())
     };
-    let schema = Arc::new(graphql::build_schema(&cfg, pool, es)?);
+
+    // Build the subscription broadcaster — one channel per writable entity
+    let broadcaster = Arc::new(Broadcaster::new(&cfg));
+
+    // Spin up an embedded CDC listener so subscriptions work without a
+    // separate `esync watch` process.
+    let cfg_arc = Arc::new(cfg.clone());
+    let _cdc_handle = spawn_cdc_listener(
+        Arc::clone(&cfg_arc),
+        Arc::clone(&pool),
+        Arc::clone(&broadcaster),
+    )
+    .await?;
+
+    let schema = Arc::new(graphql::build_schema(
+        &cfg,
+        Arc::clone(&pool),
+        Arc::clone(&es),
+        Arc::clone(&broadcaster),
+    )?);
 
     let host = args
         .host
@@ -54,15 +79,17 @@ pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
 
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
+        .route("/graphql/ws", get(graphql_ws_handler))
         .route("/graphql", get(playground_handler))
         .route("/healthz", get(health_handler))
         .with_state(state)
         .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = format!("{host}:{port}");
-    tracing::info!("GraphQL endpoint    → http://{addr}/graphql");
+    tracing::info!("GraphQL endpoint         → http://{addr}/graphql");
+    tracing::info!("GraphQL subscriptions WS → ws://{addr}/graphql/ws");
     if playground {
-        tracing::info!("GraphiQL playground → http://{addr}/graphql");
+        tracing::info!("GraphiQL playground      → http://{addr}/graphql");
     }
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -74,9 +101,28 @@ async fn graphql_handler(State(state): State<AppState>, req: GraphQLRequest) -> 
     state.schema.execute(req.into_inner()).await.into()
 }
 
+async fn graphql_ws_handler(
+    State(state): State<AppState>,
+    protocol: GraphQLProtocol,
+    websocket: axum::extract::WebSocketUpgrade,
+) -> impl IntoResponse {
+    let schema = Arc::clone(&state.schema);
+    websocket
+        .protocols(ALL_WEBSOCKET_PROTOCOLS)
+        .on_upgrade(move |stream| {
+            GraphQLWebSocket::new(stream, schema.as_ref().clone(), protocol).serve()
+        })
+}
+
 async fn playground_handler(State(state): State<AppState>) -> impl IntoResponse {
     if state.playground {
-        Html(GraphiQLSource::build().endpoint("/graphql").finish()).into_response()
+        Html(
+            GraphiQLSource::build()
+                .endpoint("/graphql")
+                .subscription_endpoint("/graphql/ws")
+                .finish(),
+        )
+        .into_response()
     } else {
         axum::http::StatusCode::NOT_FOUND.into_response()
     }

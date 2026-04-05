@@ -115,3 +115,33 @@ entities:
         pg_type: UUID
       - name: label
         pg_type: TEXT
+
+  # ── Read-only SQL-backed entity (view / custom query) ────────────────────
+  # This entity has no backing table — it is defined by an arbitrary SQL
+  # query.  esync index will use it as a sub-select source.
+  # No mutations or subscriptions are generated for sql-backed entities.
+  - name: ProductSummary
+    sql: |
+      SELECT
+        p.id,
+        p.name,
+        p.price,
+        c.name   AS category_name,
+        COUNT(o.id)::INT AS order_count
+      FROM products p
+      LEFT JOIN tags c ON c.id = ANY(ARRAY[]::uuid[])  -- placeholder join
+      LEFT JOIN orders o ON o.customer_id = p.id
+      GROUP BY p.id, p.name, p.price, c.name
+    index: product_summaries
+    id_column: id
+    columns:
+      - name: id
+        pg_type: UUID
+      - name: name
+        pg_type: TEXT
+      - name: price
+        pg_type: NUMERIC
+      - name: category_name
+        pg_type: TEXT
+      - name: order_count
+        pg_type: INT4

@@ -77,8 +77,35 @@ fn bool_true() -> bool {
 pub struct EntityConfig {
     /// GraphQL type name (CamelCase recommended)
     pub name: String,
-    /// Source Postgres table
+    /// Source Postgres table — required unless `sql` is set.
+    /// When `sql` is set this is only used as the CDC notify channel default
+    /// and as the write target for mutations; leave it empty to make the
+    /// entity fully read-only (no CDC, no mutations).
+    #[serde(default)]
     pub table: String,
+    /// Optional custom SQL query used as the data source instead of a plain
+    /// table scan.  The query must select an `id_column` value.
+    /// Entities with `sql` set are implicitly read-only (mutations are
+    /// blocked) unless you also set `readonly: false` explicitly — but that
+    /// combination makes no sense for most views, so omitting it is fine.
+    ///
+    /// Example:
+    /// ```yaml
+    /// sql: |
+    ///   SELECT p.id, p.name, c.name AS category_name,
+    ///          COUNT(o.id) AS order_count
+    ///   FROM products p
+    ///   JOIN categories c ON c.id = p.category_id
+    ///   LEFT JOIN orders o ON o.product_id = p.id
+    ///   GROUP BY p.id, p.name, c.name
+    /// ```
+    #[serde(default)]
+    pub sql: Option<String>,
+    /// Explicitly mark this entity as read-only.  When true, `create_*`,
+    /// `update_*`, and `delete_*` mutations are not generated.
+    /// Automatically true when `sql` is set.
+    #[serde(default)]
+    pub readonly: bool,
     /// Target ES index name
     pub index: String,
     /// Column used as the ES document `_id`
@@ -117,6 +144,23 @@ fn default_batch_size() -> usize {
 impl EntityConfig {
     pub fn notify_channel(&self) -> &str {
         self.notify_channel.as_deref().unwrap_or(&self.table)
+    }
+
+    /// Returns true if mutations should be blocked for this entity.
+    /// An entity is read-only when `readonly: true` OR when a custom `sql`
+    /// source is configured (arbitrary SQL cannot be written back to).
+    pub fn is_readonly(&self) -> bool {
+        self.readonly || self.sql.is_some()
+    }
+
+    /// The SQL fragment used as the row source in SELECT statements.
+    /// For sql-backed entities this wraps the custom query as a sub-select;
+    /// for table-backed entities it is just the table name.
+    pub fn source_sql(&self) -> String {
+        match &self.sql {
+            Some(query) => format!("({}) AS _src", query.trim()),
+            None => self.table.clone(),
+        }
     }
 }
 

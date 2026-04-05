@@ -1,4 +1,6 @@
+pub mod mutations;
 pub mod search;
+pub mod subscriptions;
 
 use crate::{
     config::{Config, EntityConfig, PgType, RelationConfig, RelationKind},
@@ -17,13 +19,23 @@ use std::sync::Arc;
 /// For each entity this generates:
 ///   - `list_<entity>(limit, offset, search, filter)` — paginated list
 ///   - `get_<entity>(id!)`                            — single record by PK
-///
-/// Scalar fields come from `entity.columns`.
-/// Relationship fields come from `entity.relations` and resolve lazily via SQL.
-pub fn build_schema(cfg: &Config, pool: Arc<PgPool>, es: Arc<EsClient>) -> Result<Schema> {
+///   - `create_<entity>(input!)` / `update_<entity>` / `delete_<entity>`
+///     — write-back mutations (skipped when entity.is_readonly())
+///   - `watch_<entity>`  — subscription (skipped when entity.is_readonly())
+pub fn build_schema(
+    cfg: &Config,
+    pool: Arc<PgPool>,
+    es: Arc<EsClient>,
+    broadcaster: Arc<subscriptions::Broadcaster>,
+) -> Result<Schema> {
     let cfg = Arc::new(cfg.clone());
     let mut query = Object::new("Query");
-    let mut builder = Schema::build("Query", None, None);
+    let mut mutation = Object::new("Mutation");
+    let mut subscription = Subscription::new("Subscription");
+    let mut builder = Schema::build("Query", Some("Mutation"), Some("Subscription"));
+
+    let mut has_mutations = false;
+    let mut has_subscriptions = false;
 
     for entity in &cfg.entities {
         let entity = entity.clone();
@@ -39,13 +51,46 @@ pub fn build_schema(cfg: &Config, pool: Arc<PgPool>, es: Arc<EsClient>) -> Resul
         // ── get_<entity> query ────────────────────────────────────────────
         let get_field = build_get_field(&entity, Arc::clone(&pool));
         query = query.field(get_field);
+
+        // ── mutations (skipped for read-only / sql-backed entities) ───────
+        if !entity.is_readonly() {
+            let (create_input, update_input) = mutations::build_all_input_types(&entity);
+            builder = builder.register(create_input);
+            builder = builder.register(update_input);
+            let (create_f, update_f, delete_f) = mutations::build_mutation_fields(
+                &entity,
+                Arc::clone(&pool),
+                Arc::clone(&es),
+                Arc::clone(&cfg),
+            );
+            mutation = mutation.field(create_f).field(update_f).field(delete_f);
+            has_mutations = true;
+        }
+
+        // ── subscriptions — generated unless entity is a sql-backed view ──
+        // sql-backed entities have no real table/channel to listen on.
+        // Readonly table-backed entities (readonly: true) still have CDC.
+        if entity.sql.is_none() {
+            let (event_type, sub_field) =
+                subscriptions::build_subscription_field(&entity, Arc::clone(&broadcaster));
+            builder = builder.register(event_type);
+            subscription = subscription.field(sub_field);
+            has_subscriptions = true;
+        }
     }
 
     // Register search_* fields for entities with search.enabled
     let (builder, query) =
         search::register_search(&cfg, Arc::clone(&pool), Arc::clone(&es), builder, query);
 
-    Ok(builder.register(query).finish()?)
+    let mut b = builder.register(query);
+    if has_mutations {
+        b = b.register(mutation);
+    }
+    if has_subscriptions {
+        b = b.register(subscription);
+    }
+    Ok(b.finish()?)
 }
 
 // ── Object type builder ───────────────────────────────────────────────────
@@ -175,7 +220,7 @@ async fn fetch_belongs_to(
             .map(|f| format!(" AND ({f})"))
             .unwrap_or_default()
     );
-    crate::db::fetch_rows(pool, &target.table, cols, Some(&filter), 1, 0).await
+    crate::db::fetch_rows(pool, &target.source_sql(), cols, Some(&filter), 1, 0).await
 }
 
 async fn fetch_has_many(
@@ -210,7 +255,14 @@ async fn fetch_many_to_many(
 
     let mut filter_parts = vec![format!(
         "{}.{} IN (SELECT {} FROM {join_table} WHERE {} = {})",
-        target.table, rel.target_id_col, rel.foreign_col, rel.local_col, local_val
+        // Use the real table name here for the qualified column reference in the WHERE;
+        // source_sql() returns a sub-select alias for sql-backed entities, which can't
+        // be used as a bare table qualifier.  Relation targets are always real tables.
+        target.table,
+        rel.target_id_col,
+        rel.foreign_col,
+        rel.local_col,
+        local_val
     )];
     if let Some(ref f) = rel.filter {
         filter_parts.push(format!("({f})"));
@@ -241,7 +293,7 @@ async fn fetch_with_order(
     let sql = format!(
         "SELECT row_to_json(t)::TEXT AS _row \
          FROM (SELECT {col_list} FROM {} WHERE {filter} ORDER BY {order} LIMIT {limit}) t",
-        target.table
+        target.source_sql()
     );
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
     rows.iter()
@@ -296,7 +348,7 @@ fn build_list_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
                 let filter = build_filter(&entity, search.as_deref(), extra_filter.as_deref());
                 let rows = crate::db::fetch_rows(
                     &pool,
-                    &entity.table,
+                    &entity.source_sql(),
                     &cols,
                     filter.as_deref(),
                     limit,
@@ -339,7 +391,8 @@ fn build_get_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
 
             let filter = format!("{} = '{}'", entity.id_column, id.replace('\'', "''"));
             let mut rows =
-                crate::db::fetch_rows(&pool, &entity.table, &cols, Some(&filter), 1, 0).await?;
+                crate::db::fetch_rows(&pool, &entity.source_sql(), &cols, Some(&filter), 1, 0)
+                    .await?;
 
             Ok(rows.pop().map(row_to_gql))
         })
