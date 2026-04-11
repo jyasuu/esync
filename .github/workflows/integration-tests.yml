@@ -348,11 +348,11 @@ jobs:
             return 1
           }
 
-          ESYNC_CONFIG=/tmp/esync-jwks.yaml       ESYNC_LOG=warn ./target/debug/esync serve &
+          ESYNC_CONFIG=/tmp/esync-jwks.yaml       ESYNC_LOG=debug ./target/debug/esync serve > /tmp/esync-4002.log 2>&1 &
           echo $! > /tmp/pid-4002
-          ESYNC_CONFIG=/tmp/esync-strict.yaml     ESYNC_LOG=warn ./target/debug/esync serve &
+          ESYNC_CONFIG=/tmp/esync-strict.yaml     ESYNC_LOG=debug ./target/debug/esync serve > /tmp/esync-4003.log 2>&1 &
           echo $! > /tmp/pid-4003
-          ESYNC_CONFIG=/tmp/esync-novalidate.yaml ESYNC_LOG=warn ./target/debug/esync serve &
+          ESYNC_CONFIG=/tmp/esync-novalidate.yaml ESYNC_LOG=debug ./target/debug/esync serve > /tmp/esync-4004.log 2>&1 &
           echo $! > /tmp/pid-4004
 
           wait_for_server 4002
@@ -451,6 +451,7 @@ jobs:
       - name: Stop all background servers
         if: always()
         run: |
+          cat /tmp/esync-4002.log /tmp/esync-4003.log /tmp/esync-4004.log
           for pidfile in /tmp/pid-4002 /tmp/pid-4003 /tmp/pid-4004 /tmp/jwks-server.pid; do
             [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null || true
           done
