@@ -242,24 +242,50 @@ jobs:
         env:
           PGPASSWORD: esync
         run: |
+          # NOBYPASSRLS must be set on the role BEFORE FORCE ROW LEVEL SECURITY
+          # takes effect. The table owner bypasses RLS by default; FORCE only
+          # applies once the role has NOBYPASSRLS set.
           psql -h localhost -U esync -d esync_test << 'SQL'
-            ALTER TABLE products ENABLE ROW LEVEL SECURITY;
-            ALTER TABLE products FORCE ROW LEVEL SECURITY;
+            -- 1. Strip bypass privilege from the connection role first
             ALTER ROLE esync NOBYPASSRLS;
 
+            -- 2. Enable and force RLS (owner can no longer bypass)
+            ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE products FORCE ROW LEVEL SECURITY;
+
+            -- 3. RESTRICTIVE default-deny catches anonymous (rls.token_type='')
+            --    and any future token type that has no matching permissive policy.
+            CREATE POLICY products_deny_default ON products
+              AS RESTRICTIVE FOR ALL USING (false);
+
+            -- 4. User token: active products only
             CREATE POLICY products_user ON products FOR SELECT USING (
-              current_setting('rls.token_type', true) = 'user' AND active = true
+              current_setting('rls.token_type', true) = 'user'
+              AND active = true
             );
+
+            -- 5. Admin service account: all rows, all operations
             CREATE POLICY products_admin ON products FOR ALL USING (
               current_setting('rls.token_type', true) = 'client_credentials'
               AND current_setting('rls.role', true) = 'admin'
             );
+
+            -- 6. Tenant-reader: active rows, read-only
             CREATE POLICY products_tenant_reader ON products FOR SELECT USING (
               current_setting('rls.token_type', true) = 'client_credentials'
               AND current_setting('rls.role', true) = 'tenant-reader'
               AND active = true
             );
           SQL
+
+          # Verify policies are installed correctly
+          psql -h localhost -U esync -d esync_test -c "
+            SELECT polname, polcmd, polpermissive,
+                   pg_get_expr(polqual, polrelid) AS using_expr
+            FROM pg_policy
+            WHERE polrelid = 'products'::regclass
+            ORDER BY polname;"
+
 
       # ── Token generation ─────────────────────────────────────────────────
       - name: Generate RSA key pair, JWKS, and test tokens
