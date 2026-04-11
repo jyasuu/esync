@@ -6,7 +6,7 @@
 //! These represent a service/machine identity.  The RLS variables set are:
 //!   - `rls.client_id`  — the `client_id` claim (or `sub` fallback)
 //!   - `rls.role`       — the first entry of the `roles` / `scope` claim
-//!                        (configurable via `rls_role_claim`)
+//!     (configurable via `rls_role_claim`)
 //!   - `rls.token_type` — `"client_credentials"`
 //!
 //! ## User tokens  (`grant_type=authorization_code` / OIDC / password)
@@ -480,7 +480,7 @@ fn verify_rsa_sha256(message: &[u8], signature: &[u8], n: &[u8], e: &[u8]) -> Re
 
 fn big_uint_from_bytes(bytes: &[u8]) -> Vec<u32> {
     // big-endian bytes → little-endian u32 limbs
-    let mut out = vec![0u32; (bytes.len() + 3) / 4];
+    let mut out = vec![0u32; bytes.len().div_ceil(4)];
     for (i, &b) in bytes.iter().rev().enumerate() {
         out[i / 4] |= (b as u32) << (8 * (i % 4));
     }

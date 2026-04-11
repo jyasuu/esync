@@ -159,15 +159,17 @@ async fn graphql_ws_handler(
                         let auth_ctx = if token.is_empty() || validator.is_none() {
                             AuthContext::anonymous()
                         } else {
-                            let v = validator.unwrap();
-                            match v.validate(&token).await {
-                                Ok(ctx) => ctx,
-                                Err(e) => {
-                                    tracing::warn!("WS token validation failed: {e}");
-                                    return Err(async_graphql::Error::new(format!(
-                                        "Unauthorized: {e}"
-                                    )));
-                                }
+                            match validator {
+                                Some(v) => match v.validate(&token).await {
+                                    Ok(ctx) => ctx,
+                                    Err(e) => {
+                                        tracing::warn!("WS token validation failed: {e}");
+                                        return Err(async_graphql::Error::new(format!(
+                                            "Unauthorized: {e}"
+                                        )));
+                                    }
+                                },
+                                None => AuthContext::anonymous(),
                             }
                         };
 
