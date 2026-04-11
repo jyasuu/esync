@@ -220,57 +220,61 @@ jobs:
           psql -h localhost -U esync -d postgres -c "CREATE DATABASE esync_test;"
           psql -h localhost -U esync -d esync_test -f scripts/test/setup_test_db.sql
 
-      - name: Configure RLS GUC parameter grants
+
+      - name: Create esync_app role and enable RLS with test policies
         env:
           PGPASSWORD: esync
         run: |
+          # POSTGRES_USER=esync is a SUPERUSER. Superusers ALWAYS bypass RLS —
+          # ALTER ROLE esync NOBYPASSRLS has no effect on superusers.
+          # Solution: create esync_app as a plain (non-superuser) role and have
+          # the GraphQL server connect as esync_app instead of esync.
           psql -h localhost -U esync -d esync_test << 'SQL'
+            -- 1. Create a non-superuser application role for the GraphQL server
+            CREATE ROLE esync_app LOGIN PASSWORD 'esync_app'
+              NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+
+            -- 2. Grant table + sequence access
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esync_app;
+            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO esync_app;
+
+            -- 3. Grant SET on custom RLS GUC params (Postgres 15+)
             DO $$
             BEGIN
               IF current_setting('server_version_num')::int >= 150000 THEN
-                EXECUTE 'GRANT SET ON PARAMETER "rls.token_type" TO esync';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.user_id"    TO esync';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.client_id"  TO esync';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.role"       TO esync';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.tenant_id"  TO esync';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.email"      TO esync';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.token_type" TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.user_id"    TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.client_id"  TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.role"       TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.tenant_id"  TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.email"      TO esync_app';
               END IF;
             END $$;
-          SQL
 
-      - name: Enable RLS and install test policies
-        env:
-          PGPASSWORD: esync
-        run: |
-          # NOBYPASSRLS must be set on the role BEFORE FORCE ROW LEVEL SECURITY
-          # takes effect. The table owner bypasses RLS by default; FORCE only
-          # applies once the role has NOBYPASSRLS set.
-          psql -h localhost -U esync -d esync_test << 'SQL'
-            -- 1. Strip bypass privilege from the connection role first
-            ALTER ROLE esync NOBYPASSRLS;
-
-            -- 2. Enable and force RLS (owner can no longer bypass)
+            -- 4. Enable and force RLS on products
             ALTER TABLE products ENABLE ROW LEVEL SECURITY;
             ALTER TABLE products FORCE ROW LEVEL SECURITY;
 
-            -- 3. RESTRICTIVE default-deny catches anonymous (rls.token_type='')
-            --    and any future token type that has no matching permissive policy.
+            -- 5. RESTRICTIVE deny-all: fires for every row on every query.
+            --    Anonymous sessions (no rls.token_type set) match no permissive
+            --    policy and are blocked here. Also future-proofs against unknown
+            --    token types.
             CREATE POLICY products_deny_default ON products
               AS RESTRICTIVE FOR ALL USING (false);
 
-            -- 4. User token: active products only
+            -- 6. User token: active products only
             CREATE POLICY products_user ON products FOR SELECT USING (
               current_setting('rls.token_type', true) = 'user'
               AND active = true
             );
 
-            -- 5. Admin service account: all rows, all operations
+            -- 7. Admin service account: all rows, all operations
             CREATE POLICY products_admin ON products FOR ALL USING (
               current_setting('rls.token_type', true) = 'client_credentials'
               AND current_setting('rls.role', true) = 'admin'
             );
 
-            -- 6. Tenant-reader: active rows, read-only
+            -- 8. Tenant-reader service account: active rows, read-only
             CREATE POLICY products_tenant_reader ON products FOR SELECT USING (
               current_setting('rls.token_type', true) = 'client_credentials'
               AND current_setting('rls.role', true) = 'tenant-reader'
@@ -278,13 +282,17 @@ jobs:
             );
           SQL
 
-          # Verify policies are installed correctly
-          psql -h localhost -U esync -d esync_test -c "
-            SELECT polname, polcmd, polpermissive,
+          # Verify: show policies and confirm esync_app has no superuser/bypassrls
+          psql -h localhost -U esync -d esync_test << 'SQL'
+            SELECT polname, polpermissive,
                    pg_get_expr(polqual, polrelid) AS using_expr
             FROM pg_policy
             WHERE polrelid = 'products'::regclass
-            ORDER BY polname;"
+            ORDER BY polname;
+
+            SELECT rolname, rolsuper, rolbypassrls
+            FROM pg_roles WHERE rolname IN ('esync', 'esync_app');
+          SQL
 
 
       # ── Token generation ─────────────────────────────────────────────────
