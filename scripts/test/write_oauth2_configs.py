@@ -8,7 +8,7 @@
 
 BASE = """
 postgres:
-  url: "postgres://esync:esync@localhost:5432/esync_test"
+  url: "postgres://esync_app:esync_app@localhost:5432/esync_test"
   pool_size: 5
 
 elasticsearch:

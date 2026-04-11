@@ -206,6 +206,13 @@ pub async fn set_rls_params(
 }
 
 /// Fetch rows with RLS parameters set for this transaction.
+///
+/// When `rls_params` is empty (OAuth2 disabled, no config) the fast-path
+/// is taken — no transaction overhead.  When OAuth2 IS configured, callers
+/// always pass at least `[("rls.token_type", "<type>")]` (including for
+/// anonymous requests where type = "anonymous"), so the transaction path
+/// always runs and `SET LOCAL rls.token_type` reaches the Postgres session
+/// where RLS policies can inspect it.
 pub async fn fetch_rows_rls(
     pool: &PgPool,
     source: &str,

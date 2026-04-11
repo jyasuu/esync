@@ -67,10 +67,19 @@ impl AuthContext {
 
     /// Build SET LOCAL statements for PostgreSQL RLS.
     /// Returns a Vec of (parameter_name, value) pairs.
+    ///
+    /// Always returns at least `[("rls.token_type", "<type>")]` — even for
+    /// anonymous requests — so callers can detect "OAuth2 is active" vs
+    /// "OAuth2 is disabled" by checking whether this vec is empty.
+    /// An empty vec means OAuth2 is not configured (fast-path, no transaction).
+    /// A non-empty vec (including anonymous) always goes through the transaction
+    /// path so `SET LOCAL rls.token_type` is visible to RLS policies.
     pub fn rls_params(&self, cfg: &OAuth2Config) -> Vec<(String, String)> {
         let mut params: Vec<(String, String)> = Vec::new();
 
         // Always set token type so RLS policies can branch on it.
+        // For anonymous: value is 'anonymous' — the RESTRICTIVE deny-all policy
+        // fires because no permissive policy matches 'anonymous'.
         params.push(("rls.token_type".into(), self.token_type.clone()));
 
         match self.token_type.as_str() {
@@ -94,7 +103,11 @@ impl AuthContext {
                     }
                 }
             }
-            _ => {} // anonymous — no RLS vars
+            // "anonymous" and any future unknown type:
+            // rls.token_type is already set above; no additional vars needed.
+            // The RESTRICTIVE deny-all policy blocks access since no permissive
+            // policy matches the 'anonymous' token type.
+            _ => {}
         }
 
         params
