@@ -328,14 +328,14 @@ jobs:
       # ── Hurl test suite ──────────────────────────────────────────────────
       - name: "[01] Anonymous access — RLS blocks all rows"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_url=http://127.0.0.1:4002/graphql" \
             --error-format long \
             tests/oauth2/01_anonymous.hurl
 
       - name: "[02] User token — only active products visible"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_url=http://127.0.0.1:4002/graphql" \
             --variable "user_token=$USER_TOKEN" \
             --error-format long \
@@ -343,7 +343,7 @@ jobs:
 
       - name: "[03] Admin CC token — all rows visible including inactive"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_url=http://127.0.0.1:4002/graphql" \
             --variable "cc_admin_token=$CC_ADMIN_TOKEN" \
             --error-format long \
@@ -351,7 +351,7 @@ jobs:
 
       - name: "[04] Tenant-reader CC token — active rows only"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_url=http://127.0.0.1:4002/graphql" \
             --variable "cc_tenant_token=$CC_TENANT_TOKEN" \
             --error-format long \
@@ -359,7 +359,7 @@ jobs:
 
       - name: "[05] get_product by id — RLS applies to single-row lookup"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_url=http://127.0.0.1:4002/graphql" \
             --variable "user_token=$USER_TOKEN" \
             --variable "cc_admin_token=$CC_ADMIN_TOKEN" \
@@ -368,7 +368,7 @@ jobs:
 
       - name: "[06] Token rejection — expired / bad-sig / malformed / wrong-aud / wrong-iss"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_url=http://127.0.0.1:4002/graphql" \
             --variable "expired_token=$EXPIRED_TOKEN" \
             --variable "bad_sig_token=$BAD_SIG_TOKEN" \
@@ -379,7 +379,7 @@ jobs:
 
       - name: "[07] require_auth strict — no token → 401, valid token → 200"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_strict_url=http://127.0.0.1:4003/graphql" \
             --variable "user_token=$USER_TOKEN" \
             --variable "cc_admin_token=$CC_ADMIN_TOKEN" \
@@ -388,7 +388,7 @@ jobs:
 
       - name: "[08] validation_mode:none — fake sig accepted, claims flow to RLS"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_novalidate_url=http://127.0.0.1:4004/graphql" \
             --variable "dev_token=$DEV_TOKEN" \
             --error-format long \
@@ -406,7 +406,7 @@ jobs:
 
       - name: "[09] JWKS rotation — new key accepted, old key rejected"
         run: |
-          hurl --test \
+          hurl -v --test \
             --variable "gql_url=http://127.0.0.1:4002/graphql" \
             --variable "rotated_token=$ROTATED_TOKEN" \
             --variable "user_token=$USER_TOKEN" \
