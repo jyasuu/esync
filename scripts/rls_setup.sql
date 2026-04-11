@@ -29,22 +29,41 @@ GRANT SET ON PARAMETER "rls.department" TO esync_graphql;
 
 -- ── 3. Example: multi-tenant products table ───────────────────────────────
 
+-- IMPORTANT: Set NOBYPASSRLS on the application role BEFORE FORCE RLS.
+-- Table owners bypass RLS by default; FORCE only takes effect once the role
+-- attribute is cleared.  Do this for the role that your GraphQL server uses.
+ALTER ROLE esync_graphql NOBYPASSRLS;
+
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE products FORCE ROW LEVEL SECURITY;
 
+-- Default-deny: RESTRICTIVE policy that fires for every row.
+-- Anonymous requests (rls.token_type unset/empty) match no permissive policy
+-- and this RESTRICTIVE clause returns false → zero rows visible.
+-- Also protects against any future unknown token type.
+CREATE POLICY products_deny_default ON products
+  AS RESTRICTIVE
+  FOR ALL
+  USING (false);
+
 -- Service account with role 'admin' sees everything.
--- Service account with any other role sees only its tenant.
-CREATE POLICY products_service_account ON products
+CREATE POLICY products_admin ON products
   FOR ALL
   USING (
     current_setting('rls.token_type', true) = 'client_credentials'
-    AND (
-      current_setting('rls.role', true) = 'admin'
-      OR tenant_id::text = current_setting('rls.client_id', true)
-    )
+    AND current_setting('rls.role', true) = 'admin'
   );
 
--- Authenticated users see their own tenant's rows only.
+-- Service account with any other role sees only its own tenant's rows.
+CREATE POLICY products_service_tenant ON products
+  FOR ALL
+  USING (
+    current_setting('rls.token_type', true) = 'client_credentials'
+    AND current_setting('rls.role', true) != 'admin'
+    AND tenant_id::text = current_setting('rls.client_id', true)
+  );
+
+-- Authenticated users see their own tenant's rows only (read).
 CREATE POLICY products_user ON products
   FOR SELECT
   USING (
