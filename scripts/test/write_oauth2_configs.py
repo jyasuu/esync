@@ -48,14 +48,34 @@ graphql:
   host: "127.0.0.1"
   port: 4002
   playground: false
-""" + JWKS_COMMON + "      require_auth: false\n",
+  oauth2:
+    validation_mode: jwks
+    jwks_uri: "http://localhost:8888/jwks.json"
+    jwks_cache_ttl_secs: 60
+    required_issuer: "http://localhost:8888"
+    required_audience: "esync-api"
+    clock_skew_secs: 10
+    rls_role_claim: "roles"
+    rls_user_attributes: [sub, tenant_id, email]
+    require_auth: false
+""",
 
     "/tmp/esync-strict.yaml": BASE + """
 graphql:
   host: "127.0.0.1"
   port: 4003
   playground: false
-""" + JWKS_COMMON + "      require_auth: true\n",
+  oauth2:
+    validation_mode: jwks
+    jwks_uri: "http://localhost:8888/jwks.json"
+    jwks_cache_ttl_secs: 60
+    required_issuer: "http://localhost:8888"
+    required_audience: "esync-api"
+    clock_skew_secs: 10
+    rls_role_claim: "roles"
+    rls_user_attributes: [sub, tenant_id, email]
+    require_auth: true
+""",
 
     "/tmp/esync-novalidate.yaml": BASE + """
 graphql:
