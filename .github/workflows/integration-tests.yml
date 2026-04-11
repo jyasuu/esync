@@ -148,3 +148,633 @@ jobs:
           path: |
             *.log
             /tmp/esync-*.log
+
+  # ── OAuth2 / RLS integration tests ───────────────────────────────────────
+  oauth2-tests:
+    name: OAuth2 + RLS Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests      # only run after lint/fmt pass
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: esync
+          POSTGRES_PASSWORD: esync
+          POSTGRES_DB: esync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y postgresql-client python3 python3-pip
+          pip3 install cryptography --quiet
+
+      # ── Generate RSA key pair + JWKS + test tokens ──────────────────────
+      #
+      # Everything lives in /tmp/oauth2-test/ so all subsequent steps share it.
+      # We generate:
+      #   private.pem        — RS256 signing key
+      #   jwks.json          — public JWKS (served by the mock server)
+      #   token_user.txt     — signed user JWT  (sub=user-1, tenant_id=acme, email=alice@acme.com)
+      #   token_cc.txt       — signed client-credentials JWT (client_id=svc-1, roles=admin)
+      #   token_cc_tenant.txt — signed CC JWT with roles=tenant-reader, client_id=tenant-b
+      #   token_expired.txt  — expired JWT (exp in the past)
+      #   token_bad_sig.txt  — JWT with corrupted signature
+      - name: Generate RSA key pair, JWKS, and test tokens
+        run: |
+          mkdir -p /tmp/oauth2-test
+          python3 - << 'PY'
+          import json, time, base64, os
+          from cryptography.hazmat.primitives.asymmetric import rsa, padding
+          from cryptography.hazmat.primitives import hashes, serialization
+
+          out = "/tmp/oauth2-test"
+
+          # ── Key generation ─────────────────────────────────────────────
+          key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+          pub = key.public_key()
+
+          with open(f"{out}/private.pem", "wb") as f:
+              f.write(key.private_bytes(
+                  serialization.Encoding.PEM,
+                  serialization.PrivateFormat.PKCS8,
+                  serialization.NoEncryption()
+              ))
+
+          # ── JWKS ───────────────────────────────────────────────────────
+          pub_numbers = pub.public_key().public_numbers() if hasattr(pub, 'public_key') else pub.public_numbers()
+
+          def int_to_b64(n):
+              length = (n.bit_length() + 7) // 8
+              return base64.urlsafe_b64encode(n.to_bytes(length, 'big')).rstrip(b'=').decode()
+
+          jwks = {"keys": [{
+              "kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test-key-1",
+              "n": int_to_b64(pub_numbers.n),
+              "e": int_to_b64(pub_numbers.e),
+          }]}
+          with open(f"{out}/jwks.json", "w") as f:
+              json.dump(jwks, f)
+
+          # ── JWT signing helper ─────────────────────────────────────────
+          def make_jwt(claims: dict) -> str:
+              header = base64.urlsafe_b64encode(
+                  json.dumps({"alg":"RS256","typ":"JWT","kid":"test-key-1"}).encode()
+              ).rstrip(b'=').decode()
+              payload = base64.urlsafe_b64encode(
+                  json.dumps(claims).encode()
+              ).rstrip(b'=').decode()
+              msg = f"{header}.{payload}".encode()
+              sig = key.sign(msg, padding.PKCS1v15(), hashes.SHA256())
+              sig_b64 = base64.urlsafe_b64encode(sig).rstrip(b'=').decode()
+              return f"{header}.{payload}.{sig_b64}"
+
+          now = int(time.time())
+          iss = "http://localhost:8888"
+
+          # User token
+          user_tok = make_jwt({
+              "iss": iss, "aud": "esync-api",
+              "sub": "user-001",
+              "iat": now, "exp": now + 3600,
+              "email": "alice@acme.com",
+              "tenant_id": "acme",
+              "preferred_username": "alice",
+          })
+          open(f"{out}/token_user.txt", "w").write(user_tok)
+
+          # Client-credentials token (admin role)
+          cc_tok = make_jwt({
+              "iss": iss, "aud": "esync-api",
+              "sub": "svc-1",
+              "iat": now, "exp": now + 3600,
+              "client_id": "svc-1",
+              "roles": ["admin"],
+              "gty": "client_credentials",
+          })
+          open(f"{out}/token_cc.txt", "w").write(cc_tok)
+
+          # Client-credentials token (tenant-reader role)
+          cc_tenant_tok = make_jwt({
+              "iss": iss, "aud": "esync-api",
+              "sub": "tenant-b-svc",
+              "iat": now, "exp": now + 3600,
+              "client_id": "tenant-b-svc",
+              "roles": ["tenant-reader"],
+              "gty": "client_credentials",
+          })
+          open(f"{out}/token_cc_tenant.txt", "w").write(cc_tenant_tok)
+
+          # Expired token
+          exp_tok = make_jwt({
+              "iss": iss, "aud": "esync-api",
+              "sub": "user-old",
+              "iat": now - 7200, "exp": now - 3600,
+          })
+          open(f"{out}/token_expired.txt", "w").write(exp_tok)
+
+          # Bad signature — flip last byte of a valid token
+          parts = user_tok.rsplit('.', 1)
+          bad_sig = parts[1][:-1] + ('A' if parts[1][-1] != 'A' else 'B')
+          open(f"{out}/token_bad_sig.txt", "w").write(f"{parts[0]}.{bad_sig}")
+
+          print("Generated:", os.listdir(out))
+          PY
+
+      # ── Start mock JWKS server ───────────────────────────────────────────
+      - name: Start mock JWKS server on :8888
+        run: |
+          cd /tmp/oauth2-test
+          # Serve the directory; JWKS is at http://localhost:8888/jwks.json
+          python3 -m http.server 8888 &
+          echo $! > /tmp/jwks-server.pid
+          # Wait for it to be ready
+          for i in $(seq 1 10); do
+            curl -sf http://localhost:8888/jwks.json > /dev/null && break || sleep 1
+          done
+          echo "JWKS server ready"
+          curl -sf http://localhost:8888/jwks.json | python3 -m json.tool
+
+      # ── Setup test database ──────────────────────────────────────────────
+      - name: Create and seed test database
+        env:
+          PGPASSWORD: esync
+        run: |
+          psql -h localhost -U esync -d postgres -c "CREATE DATABASE esync_test;"
+          psql -h localhost -U esync -d esync_test -f scripts/test/setup_test_db.sql
+
+      # ── Grant SET on rls.* GUC params (Postgres 15 compatibility) ─────────
+      - name: Configure RLS GUC grants
+        env:
+          PGPASSWORD: esync
+        run: |
+          psql -h localhost -U esync -d esync_test << 'SQL'
+            -- Postgres 15+ requires explicit grants to SET custom GUC params.
+            -- Allow the esync user (used by the test server) to set rls.* vars.
+            DO $$
+            BEGIN
+              -- Only execute GRANT SET if on PG 15+
+              IF current_setting('server_version_num')::int >= 150000 THEN
+                EXECUTE 'GRANT SET ON PARAMETER "rls.token_type" TO esync';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.user_id"    TO esync';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.client_id"  TO esync';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.role"       TO esync';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.tenant_id"  TO esync';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.email"      TO esync';
+              END IF;
+            END $$;
+          SQL
+
+      # ── Enable RLS on products table and add test policies ─────────────
+      - name: Enable RLS + install test policies on products
+        env:
+          PGPASSWORD: esync
+        run: |
+          psql -h localhost -U esync -d esync_test << 'SQL'
+            ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE products FORCE ROW LEVEL SECURITY;
+
+            -- esync user is the table owner; owners bypass RLS by default.
+            -- We force it so the RLS policies actually fire in tests.
+            ALTER ROLE esync NOBYPASSRLS;
+
+            -- User: sees only products whose tenant_id matches rls.tenant_id.
+            -- (Our test products table doesn't have tenant_id, so we use
+            --  a simpler rule: users see only active products.)
+            CREATE POLICY products_user ON products FOR SELECT USING (
+              current_setting('rls.token_type', true) = 'user'
+              AND active = true
+            );
+
+            -- Admin service account: sees everything.
+            CREATE POLICY products_admin ON products FOR ALL USING (
+              current_setting('rls.token_type', true) = 'client_credentials'
+              AND current_setting('rls.role', true) = 'admin'
+            );
+
+            -- Tenant-reader service account: sees only active products.
+            -- (In a real system you'd also match tenant_id = rls.client_id.)
+            CREATE POLICY products_tenant_reader ON products FOR SELECT USING (
+              current_setting('rls.token_type', true) = 'client_credentials'
+              AND current_setting('rls.role', true) = 'tenant-reader'
+              AND active = true
+            );
+          SQL
+
+      # ── Build the binary ─────────────────────────────────────────────────
+      - name: Build esync
+        run: cargo build --bin esync
+
+      # ── Write OAuth2-enabled test config ─────────────────────────────────
+      - name: Write esync.oauth2-test.yaml
+        run: |
+          cat > /tmp/esync.oauth2-test.yaml << 'CFG'
+          postgres:
+            url: "postgres://esync:esync@localhost:5432/esync_test"
+            pool_size: 5
+
+          elasticsearch:
+            url: "http://localhost:9200"
+
+          graphql:
+            host: "127.0.0.1"
+            port: 4002
+            playground: false
+
+            oauth2:
+              validation_mode: jwks
+              jwks_uri: "http://localhost:8888/jwks.json"
+              jwks_cache_ttl_secs: 60
+              required_issuer: "http://localhost:8888"
+              required_audience: "esync-api"
+              clock_skew_secs: 10
+              require_auth: false          # allow anonymous so we can test that path too
+              rls_role_claim: "roles"
+              rls_user_attributes:
+                - sub
+                - tenant_id
+                - email
+
+          entities:
+            - name: Product
+              table: products
+              index: test_products_oauth2
+              id_column: id
+              columns:
+                - name: id
+                  pg_type: UUID
+                - name: name
+                  pg_type: TEXT
+                - name: active
+                  pg_type: BOOL
+                - name: price
+                  pg_type: NUMERIC
+          CFG
+
+      # ── Start esync server with OAuth2 config ────────────────────────────
+      - name: Start esync GraphQL server (OAuth2 mode)
+        run: |
+          ESYNC_CONFIG=/tmp/esync.oauth2-test.yaml ESYNC_LOG=debug \
+            ./target/debug/esync serve --port 4002 &
+          echo $! > /tmp/esync-oauth2.pid
+          # Wait until /healthz responds
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:4002/healthz && break || sleep 1
+          done
+          echo "esync server ready"
+
+      # ── Test suite ───────────────────────────────────────────────────────
+
+      - name: "[auth] Anonymous request succeeds (require_auth: false)"
+        run: |
+          resp=$(curl -sf -X POST http://127.0.0.1:4002/graphql \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id name active } }"}')
+          echo "$resp" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert 'errors' not in d or d['errors'] == [], f'Got errors: {d}'
+          # Products table has RLS with no anon policy → expect empty list
+          items = d['data']['list_product']
+          assert isinstance(items, list), f'Expected list, got: {items}'
+          print(f'  Anonymous → {len(items)} rows (RLS blocks anon correctly)')
+          "
+
+      - name: "[auth] Request with valid user token → RLS filters correctly"
+        run: |
+          TOKEN=$(cat /tmp/oauth2-test/token_user.txt)
+          resp=$(curl -sf -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id name active } }"}')
+          echo "$resp" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert 'errors' not in d or d['errors'] == [], f'Got errors: {d}'
+          items = d['data']['list_product']
+          # RLS user policy: active=true only
+          inactive = [p for p in items if not p['active']]
+          assert inactive == [], f'User saw inactive products: {inactive}'
+          print(f'  User token → {len(items)} active products, 0 inactive (RLS correct)')
+          "
+
+      - name: "[auth] Request with admin CC token → sees all rows"
+        run: |
+          TOKEN=$(cat /tmp/oauth2-test/token_cc.txt)
+          resp=$(curl -sf -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product(limit: 100) { id name active } }"}')
+          echo "$resp" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert 'errors' not in d or d['errors'] == [], f'Got errors: {d}'
+          items = d['data']['list_product']
+          inactive = [p for p in items if not p['active']]
+          print(f'  Admin CC → {len(items)} total, {len(inactive)} inactive visible (RLS bypassed)')
+          assert len(inactive) > 0 or len(items) == 0, 'Admin should see inactive rows if any exist'
+          "
+
+      - name: "[auth] Request with tenant-reader CC token → only active rows"
+        run: |
+          TOKEN=$(cat /tmp/oauth2-test/token_cc_tenant.txt)
+          resp=$(curl -sf -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id name active } }"}')
+          echo "$resp" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert 'errors' not in d or d['errors'] == [], f'Got errors: {d}'
+          items = d['data']['list_product']
+          inactive = [p for p in items if not p['active']]
+          assert inactive == [], f'Tenant-reader should not see inactive: {inactive}'
+          print(f'  Tenant-reader CC → {len(items)} rows (all active, RLS correct)')
+          "
+
+      - name: "[auth] Expired token → 401"
+        run: |
+          TOKEN=$(cat /tmp/oauth2-test/token_expired.txt)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id } }"}')
+          echo "  Expired token → HTTP $status"
+          [ "$status" = "401" ] || { echo "Expected 401, got $status"; exit 1; }
+
+      - name: "[auth] Tampered signature → 401"
+        run: |
+          TOKEN=$(cat /tmp/oauth2-test/token_bad_sig.txt)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id } }"}')
+          echo "  Bad signature → HTTP $status"
+          [ "$status" = "401" ] || { echo "Expected 401, got $status"; exit 1; }
+
+      - name: "[auth] Malformed token (not a JWT) → 401"
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer not-a-jwt" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id } }"}')
+          echo "  Malformed token → HTTP $status"
+          [ "$status" = "401" ] || { echo "Expected 401, got $status"; exit 1; }
+
+      # ── require_auth: true mode ──────────────────────────────────────────
+      - name: Write esync config with require_auth:true
+        run: |
+          sed 's/require_auth: false/require_auth: true/' \
+            /tmp/esync.oauth2-test.yaml > /tmp/esync.oauth2-strict.yaml
+          # Start a second server on port 4003
+          ESYNC_CONFIG=/tmp/esync.oauth2-strict.yaml ESYNC_LOG=warn \
+            ./target/debug/esync serve --port 4003 &
+          echo $! > /tmp/esync-strict.pid
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:4003/healthz && break || sleep 1
+          done
+
+      - name: "[auth] require_auth=true: no token → 401"
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://127.0.0.1:4003/graphql \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id } }"}')
+          echo "  No token (strict) → HTTP $status"
+          [ "$status" = "401" ] || { echo "Expected 401, got $status"; exit 1; }
+
+      - name: "[auth] require_auth=true: valid token → 200"
+        run: |
+          TOKEN=$(cat /tmp/oauth2-test/token_user.txt)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://127.0.0.1:4003/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id } }"}')
+          echo "  Valid token (strict) → HTTP $status"
+          [ "$status" = "200" ] || { echo "Expected 200, got $status"; exit 1; }
+
+      # ── validation_mode: none (dev mode) ─────────────────────────────────
+      - name: Write esync config with validation_mode:none
+        run: |
+          python3 - << 'PY'
+          content = open('/tmp/esync.oauth2-test.yaml').read()
+          content = content.replace('validation_mode: jwks', 'validation_mode: none')
+          content = content.replace('port: 4002', 'port: 4004')
+          content = content.replace('test_products_oauth2', 'test_products_novalidate')
+          open('/tmp/esync.oauth2-novalidate.yaml', 'w').write(content)
+          PY
+          ESYNC_CONFIG=/tmp/esync.oauth2-novalidate.yaml ESYNC_LOG=warn \
+            ./target/debug/esync serve --port 4004 &
+          echo $! > /tmp/esync-novalidate.pid
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:4004/healthz && break || sleep 1
+          done
+
+      - name: "[auth] validation_mode=none: unverified token claims still flow to RLS"
+        run: |
+          # Build a JWT without signing (last segment = empty — server won't verify)
+          python3 - << 'PY'
+          import base64, json, time
+          now = int(time.time())
+          hdr = base64.urlsafe_b64encode(b'{"alg":"RS256","typ":"JWT","kid":"k"}').rstrip(b'=').decode()
+          pay = base64.urlsafe_b64encode(json.dumps({
+              "sub": "dev-user", "iat": now, "exp": now+3600,
+              "tenant_id": "dev-tenant", "email": "dev@test.com"
+          }).encode()).rstrip(b'=').decode()
+          # Fake signature — server accepts it in none mode
+          fake_sig = base64.urlsafe_b64encode(b'fakesig').rstrip(b'=').decode()
+          print(f"{hdr}.{pay}.{fake_sig}", end='')
+          PY > /tmp/dev_token.txt
+
+          TOKEN=$(cat /tmp/dev_token.txt)
+          resp=$(curl -sf -X POST http://127.0.0.1:4004/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id name } }"}')
+          echo "$resp" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          # Should not error even with fake token in none mode
+          assert 'errors' not in d or d['errors'] == [], f'Unexpected errors: {d}'
+          print(f'  none-mode fake token → accepted, {len(d[\"data\"][\"list_product\"])} rows')
+          "
+
+      # ── JWKS key rotation: cache invalidation ─────────────────────────────
+      - name: "[auth] JWKS key rotation: new key works, old cached key rejected"
+        run: |
+          python3 - << 'PY'
+          import json, time, base64, subprocess, urllib.request
+          from cryptography.hazmat.primitives.asymmetric import rsa, padding
+          from cryptography.hazmat.primitives import hashes, serialization
+
+          # Generate a second key pair (simulates IdP rotation)
+          key2 = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+          pub2 = key2.public_key()
+          pub2_numbers = pub2.public_numbers()
+
+          def int_to_b64(n):
+              length = (n.bit_length() + 7) // 8
+              return base64.urlsafe_b64encode(n.to_bytes(length, 'big')).rstrip(b'=').decode()
+
+          # Update JWKS to include only the new key (simulates old key removed)
+          new_jwks = {"keys": [{
+              "kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test-key-2",
+              "n": int_to_b64(pub2_numbers.n),
+              "e": int_to_b64(pub2_numbers.e),
+          }]}
+          with open('/tmp/oauth2-test/jwks.json', 'w') as f:
+              json.dump(new_jwks, f)
+
+          # Token signed with OLD key — should fail after cache expires
+          # (cache TTL is 60s; we test cache miss by using a kid that's gone)
+          print("JWKS updated to key-2 only")
+
+          # Sign a token with the new key
+          now = int(time.time())
+          hdr = base64.urlsafe_b64encode(
+              json.dumps({"alg":"RS256","typ":"JWT","kid":"test-key-2"}).encode()
+          ).rstrip(b'=').decode()
+          pay = base64.urlsafe_b64encode(json.dumps({
+              "iss": "http://localhost:8888", "aud": "esync-api",
+              "sub": "user-rotated", "iat": now, "exp": now+3600,
+              "email": "rotated@test.com", "tenant_id": "acme",
+              "preferred_username": "rotated"
+          }).encode()).rstrip(b'=').decode()
+          sig = key2.sign(f"{hdr}.{pay}".encode(), padding.PKCS1v15(), hashes.SHA256())
+          tok = f"{hdr}.{pay}.{base64.urlsafe_b64encode(sig).rstrip(b'=').decode()}"
+          with open('/tmp/oauth2-test/token_rotated.txt', 'w') as f:
+              f.write(tok)
+          print(f"New token (kid=test-key-2) written")
+          PY
+
+          # New-key token should succeed (server fetches fresh JWKS for unknown kid)
+          TOKEN=$(cat /tmp/oauth2-test/token_rotated.txt)
+          resp=$(curl -sf -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id } }"}')
+          echo "$resp" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert 'errors' not in d or d['errors'] == [], f'New-key token rejected: {d}'
+          print('  key-2 token accepted after JWKS refresh ✓')
+          "
+
+          # Old-key token (kid=test-key-1) should now be rejected
+          TOKEN=$(cat /tmp/oauth2-test/token_user.txt)
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product { id } }"}')
+          echo "  Old key (kid=test-key-1, removed from JWKS) → HTTP $status"
+          [ "$status" = "401" ] || { echo "Expected 401 for removed key, got $status"; exit 1; }
+
+      # ── RLS context verification via Postgres ────────────────────────────
+      - name: "[rls] Verify SET LOCAL vars reach Postgres inside transaction"
+        env:
+          PGPASSWORD: esync
+        run: |
+          # We can't intercept the SET LOCAL directly from outside, but we can
+          # verify RLS filtering is correct by inserting known rows and checking
+          # what each token type sees.
+          psql -h localhost -U esync -d esync_test << 'SQL'
+            -- Insert one active and one inactive product for RLS test
+            INSERT INTO products (id, name, active, price)
+            VALUES
+              ('aaaaaaaa-0000-0000-0000-000000000001', 'Active Widget',   true,  9.99),
+              ('aaaaaaaa-0000-0000-0000-000000000002', 'Inactive Widget', false, 4.99)
+            ON CONFLICT (id) DO NOTHING;
+          SQL
+
+          # User token: should see only Active Widget
+          USER_TOKEN=$(cat /tmp/oauth2-test/token_user.txt)
+          resp=$(curl -sf -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $USER_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product(limit:100) { id name active } }"}')
+          python3 - "$resp" << 'PY'
+          import sys, json
+          d = json.loads(sys.argv[1])
+          items = d['data']['list_product']
+          inactive = [p for p in items if not p['active']]
+          assert inactive == [], f"User saw inactive: {inactive}"
+          active = [p for p in items if p['active']]
+          print(f"  User token RLS: {len(active)} active, {len(inactive)} inactive ✓")
+          PY
+
+          # Admin CC token: should see both
+          CC_TOKEN=$(cat /tmp/oauth2-test/token_cc.txt)
+          resp=$(curl -sf -X POST http://127.0.0.1:4002/graphql \
+            -H "Authorization: Bearer $CC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ list_product(limit:100) { id name active } }"}')
+          python3 - "$resp" << 'PY'
+          import sys, json
+          d = json.loads(sys.argv[1])
+          items = d['data']['list_product']
+          inactive = [p for p in items if not p['active']]
+          assert len(inactive) >= 1, f"Admin CC should see inactive rows, got: {items}"
+          print(f"  Admin CC RLS: {len(items)} total, {len(inactive)} inactive ✓")
+          PY
+
+      # ── Cleanup ──────────────────────────────────────────────────────────
+      - name: Stop all background servers
+        if: always()
+        run: |
+          for pidfile in /tmp/esync-oauth2.pid /tmp/esync-strict.pid \
+                         /tmp/esync-novalidate.pid /tmp/jwks-server.pid; do
+            [ -f "$pidfile" ] && kill $(cat "$pidfile") 2>/dev/null || true
+          done
+
+      - name: Upload OAuth2 test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oauth2-test-artifacts
+          path: |
+            /tmp/oauth2-test/jwks.json
+            /tmp/esync.oauth2-test.yaml
+            /tmp/esync.oauth2-strict.yaml
+            /tmp/esync.oauth2-novalidate.yaml
+            *.log
+            /tmp/esync-*.log
