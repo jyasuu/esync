@@ -255,26 +255,26 @@ jobs:
             ALTER TABLE products ENABLE ROW LEVEL SECURITY;
             ALTER TABLE products FORCE ROW LEVEL SECURITY;
 
-            -- 5. RESTRICTIVE deny-all: fires for every row on every query.
-            --    Anonymous sessions (no rls.token_type set) match no permissive
-            --    policy and are blocked here. Also future-proofs against unknown
-            --    token types.
-            CREATE POLICY products_deny_default ON products
-              AS RESTRICTIVE FOR ALL USING (false);
+            -- 5. Permissive policies: Postgres denies by default when FORCE ROW
+            --    LEVEL SECURITY is set and NO permissive policy matches.
+            --    Anonymous sessions (rls.token_type = 'anonymous') match none of
+            --    the policies below → zero rows returned automatically.
+            --    No RESTRICTIVE policy needed: RESTRICTIVE USING (false) would
+            --    block ALL rows for ALL roles including the ones below.
 
-            -- 6. User token: active products only
+            -- User token: active products only
             CREATE POLICY products_user ON products FOR SELECT USING (
               current_setting('rls.token_type', true) = 'user'
               AND active = true
             );
 
-            -- 7. Admin service account: all rows, all operations
+            -- Admin service account: all rows, all operations
             CREATE POLICY products_admin ON products FOR ALL USING (
               current_setting('rls.token_type', true) = 'client_credentials'
               AND current_setting('rls.role', true) = 'admin'
             );
 
-            -- 8. Tenant-reader service account: active rows, read-only
+            -- Tenant-reader service account: active rows, read-only
             CREATE POLICY products_tenant_reader ON products FOR SELECT USING (
               current_setting('rls.token_type', true) = 'client_credentials'
               AND current_setting('rls.role', true) = 'tenant-reader'
