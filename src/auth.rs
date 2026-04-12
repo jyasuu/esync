@@ -242,6 +242,11 @@ impl TokenValidator {
         let expires_at =
             SystemTime::now() + Duration::from_secs(self.cfg.jwks_cache_ttl_secs.unwrap_or(300));
 
+        // Replace the entire cache with the fresh JWKS response.
+        // Inserting without clearing would leave rotated-away keys in the map
+        // indefinitely, allowing revoked kids to keep validating tokens.
+        cache.keys.clear();
+
         for key_obj in keys {
             let k = key_obj.get("kid").and_then(Value::as_str).unwrap_or("");
             let n_b64 = key_obj.get("n").and_then(Value::as_str).unwrap_or("");
