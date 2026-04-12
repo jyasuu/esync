@@ -34,7 +34,7 @@ JWKS_COMMON = """
     oauth2:
       validation_mode: jwks
       jwks_uri: "http://localhost:8888/jwks.json"
-      jwks_cache_ttl_secs: 60
+      jwks_cache_ttl_secs: 1
       required_issuer: "http://localhost:8888"
       required_audience: "esync-api"
       clock_skew_secs: 10
@@ -51,7 +51,7 @@ graphql:
   oauth2:
     validation_mode: jwks
     jwks_uri: "http://localhost:8888/jwks.json"
-    jwks_cache_ttl_secs: 60
+    jwks_cache_ttl_secs: 1
     required_issuer: "http://localhost:8888"
     required_audience: "esync-api"
     clock_skew_secs: 10
@@ -68,7 +68,7 @@ graphql:
   oauth2:
     validation_mode: jwks
     jwks_uri: "http://localhost:8888/jwks.json"
-    jwks_cache_ttl_secs: 60
+    jwks_cache_ttl_secs: 1
     required_issuer: "http://localhost:8888"
     required_audience: "esync-api"
     clock_skew_secs: 10
