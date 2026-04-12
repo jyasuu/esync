@@ -16,13 +16,13 @@ jsonpath "$.errors" not exists
 jsonpath "$.data.list_product" isCollection
 
 # Must see the 4 active products
-jsonpath "$.data.list_product[*].id" includes "00000000-0000-0000-0000-000000000001"
-jsonpath "$.data.list_product[*].id" includes "00000000-0000-0000-0000-000000000002"
-jsonpath "$.data.list_product[*].id" includes "00000000-0000-0000-0000-000000000003"
-jsonpath "$.data.list_product[*].id" includes "00000000-0000-0000-0000-000000000005"
+jsonpath "$.data.list_product[*].id" contains "00000000-0000-0000-0000-000000000001"
+jsonpath "$.data.list_product[*].id" contains "00000000-0000-0000-0000-000000000002"
+jsonpath "$.data.list_product[*].id" contains "00000000-0000-0000-0000-000000000003"
+jsonpath "$.data.list_product[*].id" contains "00000000-0000-0000-0000-000000000005"
 
 # Must NOT see the inactive product (Delta Thing, id ..004)
-jsonpath "$.data.list_product[*].id" not includes "00000000-0000-0000-0000-000000000004"
+jsonpath "$.data.list_product[*].id" not contains "00000000-0000-0000-0000-000000000004"
 
 # All returned rows must be active
-jsonpath "$.data.list_product[*].active" not includes false
+jsonpath "$.data.list_product[*].active" not contains false

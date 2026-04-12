@@ -16,7 +16,7 @@ jsonpath "$.errors" not exists
 jsonpath "$.data.list_product" isCollection
 
 # Must NOT see the inactive product
-jsonpath "$.data.list_product[*].id" not includes "00000000-0000-0000-0000-000000000004"
+jsonpath "$.data.list_product[*].id" not contains "00000000-0000-0000-0000-000000000004"
 
 # All returned rows are active
-jsonpath "$.data.list_product[*].active" not includes false
+jsonpath "$.data.list_product[*].active" not contains false

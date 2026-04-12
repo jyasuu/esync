@@ -23,4 +23,4 @@ HTTP 200
 [Asserts]
 jsonpath "$.errors" not exists
 jsonpath "$.data.list_product" isCollection
-jsonpath "$.data.list_product" isEmpty
+jsonpath "$.data.list_product" count == 0

@@ -1,7 +1,7 @@
 # 05_get_by_id_rls.hurl
 # Verify RLS applies to get_product (single-row lookup) too, not only list_product.
 
-# User token: get_product for an ACTIVE product → returns data
+# Entry 1: User token + ACTIVE product → returns data
 POST {{gql_url}}
 Authorization: Bearer {{user_token}}
 Content-Type: application/json
@@ -15,9 +15,7 @@ jsonpath "$.errors" not exists
 jsonpath "$.data.get_product.id" == "00000000-0000-0000-0000-000000000001"
 jsonpath "$.data.get_product.active" == true
 
-
-
-# User token: get_product for the INACTIVE product → RLS hides it (null)
+# Entry 2: User token + INACTIVE product → RLS hides it (null)
 POST {{gql_url}}
 Authorization: Bearer {{user_token}}
 Content-Type: application/json
@@ -28,11 +26,9 @@ Content-Type: application/json
 HTTP 200
 [Asserts]
 jsonpath "$.errors" not exists
-jsonpath "$.data.get_product" isNull
+jsonpath "$.data.get_product" == null
 
-
-
-# Admin CC token: get_product for the INACTIVE product → visible
+# Entry 3: Admin CC token + INACTIVE product → visible
 POST {{gql_url}}
 Authorization: Bearer {{cc_admin_token}}
 Content-Type: application/json
