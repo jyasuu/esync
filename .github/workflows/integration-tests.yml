@@ -437,6 +437,9 @@ jobs:
           python3 scripts/test/rotate_jwks.py
           set -a; source /tmp/oauth2-test/vars_rotated.env; set +a
           echo "ROTATED_TOKEN=${ROTATED_TOKEN}" >> "$GITHUB_ENV"
+          # Wait for the 1-second JWKS cache TTL to expire so the server
+          # will re-fetch jwks.json on the next request with an unknown kid.
+          sleep 2
 
       - name: "[09] JWKS rotation — new key accepted, old key rejected"
         run: |
