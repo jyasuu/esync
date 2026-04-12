@@ -1,16 +1,17 @@
 # 01_anonymous.hurl
 # Anonymous requests (no Authorization header) are accepted when require_auth: false,
-# but RLS blocks all rows.
+# but RLS returns zero rows.
 #
-# What happens:
+# How it works:
 #   - No Authorization header → AuthContext::anonymous() → token_type = "anonymous"
-#   - rls_params() emits SET LOCAL rls.token_type = 'anonymous'
-#   - RESTRICTIVE policy products_deny_default: USING (false) fires for every row
-#   - No permissive policy matches token_type='anonymous'
-#   - Result: empty list (RLS deny-all)
+#   - SET LOCAL rls.token_type = 'anonymous' is executed in the transaction
+#   - No permissive RLS policy matches token_type='anonymous'
+#   - Postgres FORCE ROW LEVEL SECURITY default: deny when no policy matches
+#   - Result: empty list
 #
-# This requires the GraphQL server to connect as a non-superuser role (esync_app).
-# Superusers always bypass RLS regardless of FORCE ROW LEVEL SECURITY.
+# Note: we do NOT use AS RESTRICTIVE USING (false) — that would block all rows
+# for ALL roles including user/admin. The default-deny behaviour of FORCE RLS
+# is sufficient when the application role is non-superuser (esync_app).
 
 POST {{gql_url}}
 Content-Type: application/json

@@ -37,14 +37,12 @@ ALTER ROLE esync_graphql NOBYPASSRLS;
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE products FORCE ROW LEVEL SECURITY;
 
--- Default-deny: RESTRICTIVE policy that fires for every row.
--- Anonymous requests (rls.token_type unset/empty) match no permissive policy
--- and this RESTRICTIVE clause returns false → zero rows visible.
--- Also protects against any future unknown token type.
-CREATE POLICY products_deny_default ON products
-  AS RESTRICTIVE
-  FOR ALL
-  USING (false);
+-- No RESTRICTIVE policy needed.
+-- With FORCE ROW LEVEL SECURITY, Postgres denies all rows by default when
+-- no permissive policy matches. Anonymous sessions (rls.token_type='anonymous')
+-- don't match any policy below → zero rows returned automatically.
+-- RESTRICTIVE USING (false) would incorrectly block all roles including the
+-- permissive ones below.
 
 -- Service account with role 'admin' sees everything.
 CREATE POLICY products_admin ON products

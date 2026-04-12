@@ -78,8 +78,8 @@ impl AuthContext {
         let mut params: Vec<(String, String)> = Vec::new();
 
         // Always set token type so RLS policies can branch on it.
-        // For anonymous: value is 'anonymous' — the RESTRICTIVE deny-all policy
-        // fires because no permissive policy matches 'anonymous'.
+        // For anonymous: value is 'anonymous'. No permissive RLS policy matches
+        // 'anonymous', so Postgres FORCE ROW LEVEL SECURITY denies all rows by default.
         params.push(("rls.token_type".into(), self.token_type.clone()));
 
         match self.token_type.as_str() {
@@ -105,8 +105,8 @@ impl AuthContext {
             }
             // "anonymous" and any future unknown type:
             // rls.token_type is already set above; no additional vars needed.
-            // The RESTRICTIVE deny-all policy blocks access since no permissive
-            // policy matches the 'anonymous' token type.
+            // No permissive RLS policy matches 'anonymous' — Postgres FORCE RLS
+            // denies all rows by default. No RESTRICTIVE policy needed.
             _ => {}
         }
 
