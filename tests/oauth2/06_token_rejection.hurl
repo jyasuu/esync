@@ -12,7 +12,7 @@ Content-Type: application/json
 
 HTTP 401
 
----
+
 
 # ── Tampered signature (valid structure, wrong sig bytes) ─────────────────
 POST {{gql_url}}
@@ -24,7 +24,7 @@ Content-Type: application/json
 
 HTTP 401
 
----
+
 
 # ── Completely malformed — not a JWT at all ───────────────────────────────
 POST {{gql_url}}
@@ -36,7 +36,7 @@ Content-Type: application/json
 
 HTTP 401
 
----
+
 
 # ── Only two JWT parts (missing signature segment) ────────────────────────
 POST {{gql_url}}
@@ -48,7 +48,7 @@ Content-Type: application/json
 
 HTTP 401
 
----
+
 
 # ── Wrong audience claim ──────────────────────────────────────────────────
 POST {{gql_url}}
@@ -60,7 +60,7 @@ Content-Type: application/json
 
 HTTP 401
 
----
+
 
 # ── Wrong issuer claim ────────────────────────────────────────────────────
 POST {{gql_url}}

@@ -15,7 +15,7 @@ jsonpath "$.errors" not exists
 jsonpath "$.data.get_product.id" == "00000000-0000-0000-0000-000000000001"
 jsonpath "$.data.get_product.active" == true
 
----
+
 
 # User token: get_product for the INACTIVE product → RLS hides it (null)
 POST {{gql_url}}
@@ -30,7 +30,7 @@ HTTP 200
 jsonpath "$.errors" not exists
 jsonpath "$.data.get_product" isNull
 
----
+
 
 # Admin CC token: get_product for the INACTIVE product → visible
 POST {{gql_url}}

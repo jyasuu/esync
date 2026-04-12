@@ -20,7 +20,7 @@ jsonpath "$.data.list_product" isCollection
 jsonpath "$.data.list_product[*].id" not includes "00000000-0000-0000-0000-000000000004"
 jsonpath "$.data.list_product[*].active" not includes false
 
----
+
 
 # ── No token in none-mode with require_auth:false → still OK ─────────────
 POST {{gql_novalidate_url}}

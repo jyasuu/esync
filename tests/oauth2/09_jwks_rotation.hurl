@@ -17,7 +17,7 @@ HTTP 200
 jsonpath "$.errors" not exists
 jsonpath "$.data.list_product" isCollection
 
----
+
 
 # ── Old key rejected after rotation ──────────────────────────────────────
 POST {{gql_url}}

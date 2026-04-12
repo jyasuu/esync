@@ -11,7 +11,7 @@ Content-Type: application/json
 
 HTTP 401
 
----
+
 
 # ── Empty Bearer → 401 ───────────────────────────────────────────────────
 POST {{gql_strict_url}}
@@ -23,7 +23,7 @@ Content-Type: application/json
 
 HTTP 401
 
----
+
 
 # ── Valid user token → 200 ────────────────────────────────────────────────
 POST {{gql_strict_url}}
@@ -38,7 +38,7 @@ HTTP 200
 jsonpath "$.errors" not exists
 jsonpath "$.data.list_product" isCollection
 
----
+
 
 # ── Valid admin CC token → 200 ────────────────────────────────────────────
 POST {{gql_strict_url}}
