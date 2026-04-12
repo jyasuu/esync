@@ -88,6 +88,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 bytes      = "1"
 sha2       = "0.10"
 base64     = "0.22"
+rsa        = { version = "0.9", features = ["sha2"] }
 
 # ── SAP MM integration test targets ──────────────────────────────────────────
 [[test]]

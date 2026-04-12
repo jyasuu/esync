@@ -434,199 +434,34 @@ impl TokenValidator {
     }
 }
 
-// ── RSA SHA-256 signature verification (no external crypto dep) ──────────
+// ── RSA-SHA256 signature verification via `rsa` crate ───────────────────
 //
-// We implement a minimal PKCS#1 v1.5 RSA-SHA256 verifier using only stdlib
-// BigUint arithmetic so we don't have to add ring/rsa to Cargo.toml.
-// For production use with many keys / high traffic, swap this for `jsonwebtoken`
-// or `ring` crate.  This is intentionally simple and correct for RS256.
+// Uses rsa 0.9 + sha2 0.10 for PKCS#1 v1.5 verification.
+// The hand-rolled bignum implementation had overflow panics in bn_mul
+// (u64 accumulator overflow for 2048-bit keys) and a shift-by-32 panic
+// in bn_shl when bit_shift == 0.  The `rsa` crate handles all of this
+// correctly with a proven big-integer backend (num-bigint).
 
 fn verify_rsa_sha256(message: &[u8], signature: &[u8], n: &[u8], e: &[u8]) -> Result<()> {
-    use sha2::{Digest, Sha256};
+    use rsa::{
+        pkcs1v15::{Signature, VerifyingKey},
+        signature::Verifier,
+        BigUint, RsaPublicKey,
+    };
+    use sha2::Sha256;
 
-    let hash = Sha256::digest(message);
+    let public_key = RsaPublicKey::new(BigUint::from_bytes_be(n), BigUint::from_bytes_be(e))
+        .context("Failed to construct RSA public key from JWKS n/e")?;
 
-    // RSA public key operation: sig^e mod n
-    let sig_int = big_uint_from_bytes(signature);
-    let n_int = big_uint_from_bytes(n);
-    let e_int = big_uint_from_bytes(e);
-    let decrypted = mod_pow(sig_int, e_int, &n_int);
+    let verifying_key = VerifyingKey::<Sha256>::new(public_key);
 
-    let decrypted_bytes = big_uint_to_bytes_padded(&decrypted, n.len());
+    let sig = Signature::try_from(signature).context("Failed to parse RSA signature bytes")?;
 
-    // PKCS#1 v1.5 padding check: 0x00 0x01 [0xFF...] 0x00 [DigestInfo] [hash]
-    // DigestInfo for SHA-256 = {0x30,0x31,0x30,0x0d,0x06,0x09,0x60,0x86,0x48,
-    //                           0x01,0x65,0x03,0x04,0x02,0x01,0x05,0x00,0x04,0x20}
-    const SHA256_PREFIX: &[u8] = &[
-        0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-        0x05, 0x00, 0x04, 0x20,
-    ];
-
-    let expected_suffix: Vec<u8> = [SHA256_PREFIX, hash.as_slice()].concat();
-    let min_len = 3 + expected_suffix.len(); // 0x00 0x01 ... 0x00 suffix
-
-    if decrypted_bytes.len() < min_len || decrypted_bytes[0] != 0x00 || decrypted_bytes[1] != 0x01 {
-        bail!("JWT signature verification failed (bad padding)");
-    }
-
-    // Find the 0x00 separator after the 0xFF pad bytes.
-    let sep_pos = decrypted_bytes[2..]
-        .iter()
-        .position(|&b| b == 0x00)
-        .map(|p| p + 2)
-        .context("JWT signature bad padding: no 0x00 separator")?;
-
-    // All bytes between 0x01 and the separator must be 0xFF.
-    if decrypted_bytes[2..sep_pos].iter().any(|&b| b != 0xff) {
-        bail!("JWT signature bad PKCS#1 padding");
-    }
-
-    let digest_info = &decrypted_bytes[sep_pos + 1..];
-    if digest_info != expected_suffix.as_slice() {
-        bail!("JWT signature verification failed (digest mismatch)");
-    }
+    verifying_key
+        .verify(message, &sig)
+        .context("JWT signature verification failed")?;
 
     Ok(())
-}
-
-// ── Minimal big-integer arithmetic for RSA ────────────────────────────────
-
-fn big_uint_from_bytes(bytes: &[u8]) -> Vec<u32> {
-    // big-endian bytes → little-endian u32 limbs
-    let mut out = vec![0u32; bytes.len().div_ceil(4)];
-    for (i, &b) in bytes.iter().rev().enumerate() {
-        out[i / 4] |= (b as u32) << (8 * (i % 4));
-    }
-    out
-}
-
-fn big_uint_to_bytes_padded(limbs: &[u32], len: usize) -> Vec<u8> {
-    let total = limbs.len() * 4;
-    let mut bytes = vec![0u8; total];
-    for (i, &limb) in limbs.iter().enumerate() {
-        let base = total - i * 4;
-        bytes[base - 1] = (limb & 0xff) as u8;
-        bytes[base - 2] = ((limb >> 8) & 0xff) as u8;
-        bytes[base - 3] = ((limb >> 16) & 0xff) as u8;
-        bytes[base - 4] = ((limb >> 24) & 0xff) as u8;
-    }
-    // Trim leading zeros then left-pad to `len`.
-    let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
-    let trimmed = &bytes[start..];
-    if trimmed.len() >= len {
-        trimmed.to_vec()
-    } else {
-        let mut out = vec![0u8; len];
-        out[len - trimmed.len()..].copy_from_slice(trimmed);
-        out
-    }
-}
-
-/// Square-and-multiply mod_pow for arbitrary-precision (Vec<u32>) limbs.
-fn mod_pow(mut base: Vec<u32>, mut exp: Vec<u32>, modulus: &[u32]) -> Vec<u32> {
-    let one = vec![1u32];
-    let mut result = one.clone();
-    base = bn_rem(&base, modulus);
-    while !bn_is_zero(&exp) {
-        if exp[0] & 1 == 1 {
-            result = bn_rem(&bn_mul(&result, &base), modulus);
-        }
-        exp = bn_shr1(&exp);
-        base = bn_rem(&bn_mul(&base, &base), modulus);
-    }
-    result
-}
-
-fn bn_is_zero(a: &[u32]) -> bool {
-    a.iter().all(|&x| x == 0)
-}
-
-fn bn_shr1(a: &[u32]) -> Vec<u32> {
-    let mut out = vec![0u32; a.len()];
-    let mut carry = 0u32;
-    for i in (0..a.len()).rev() {
-        out[i] = (a[i] >> 1) | carry;
-        carry = (a[i] & 1) << 31;
-    }
-    out
-}
-
-fn bn_mul(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = vec![0u64; a.len() + b.len()];
-    for (i, &ai) in a.iter().enumerate() {
-        for (j, &bj) in b.iter().enumerate() {
-            out[i + j] += (ai as u64) * (bj as u64);
-        }
-    }
-    // carry
-    for i in 0..out.len() - 1 {
-        out[i + 1] += out[i] >> 32;
-        out[i] &= 0xffff_ffff;
-    }
-    out.iter().map(|&x| x as u32).collect()
-}
-
-fn bn_rem(a: &[u32], m: &[u32]) -> Vec<u32> {
-    // Simple long division.  Slow but correct for one-time RSA verify.
-    let mut rem = a.to_vec();
-    while bn_cmp(&rem, m) != std::cmp::Ordering::Less {
-        let shift = bn_bit_len(&rem).saturating_sub(bn_bit_len(m));
-        let mut shifted = bn_shl(m, shift);
-        if bn_cmp(&shifted, &rem) == std::cmp::Ordering::Greater {
-            shifted = bn_shr1(&shifted);
-            if bn_cmp(&shifted, &rem) == std::cmp::Ordering::Greater {
-                break;
-            }
-        }
-        rem = bn_sub(&rem, &shifted);
-    }
-    rem
-}
-
-fn bn_bit_len(a: &[u32]) -> usize {
-    for i in (0..a.len()).rev() {
-        if a[i] != 0 {
-            return i * 32 + 32 - a[i].leading_zeros() as usize;
-        }
-    }
-    0
-}
-
-fn bn_shl(a: &[u32], bits: usize) -> Vec<u32> {
-    let word_shift = bits / 32;
-    let bit_shift = bits % 32;
-    let mut out = vec![0u32; a.len() + word_shift + 1];
-    for (i, &v) in a.iter().enumerate() {
-        out[i + word_shift] |= v << bit_shift;
-        if bit_shift > 0 && i + word_shift + 1 < out.len() {
-            out[i + word_shift + 1] |= v >> (32 - bit_shift);
-        }
-    }
-    out
-}
-
-fn bn_sub(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = a.to_vec();
-    let mut borrow = 0i64;
-    for i in 0..b.len() {
-        let diff = out[i] as i64 - b[i] as i64 - borrow;
-        out[i] = (diff & 0xffff_ffff) as u32;
-        borrow = if diff < 0 { 1 } else { 0 };
-    }
-    out
-}
-
-fn bn_cmp(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
-    let max_len = a.len().max(b.len());
-    for i in (0..max_len).rev() {
-        let av = if i < a.len() { a[i] } else { 0 };
-        let bv = if i < b.len() { b[i] } else { 0 };
-        match av.cmp(&bv) {
-            std::cmp::Ordering::Equal => continue,
-            other => return other,
-        }
-    }
-    std::cmp::Ordering::Equal
 }
 
 // ── Axum extractor ───────────────────────────────────────────────────────
