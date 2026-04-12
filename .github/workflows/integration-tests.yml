@@ -148,3 +148,326 @@ jobs:
           path: |
             *.log
             /tmp/esync-*.log
+
+  # ── OAuth2 / RLS integration tests ───────────────────────────────────────
+  oauth2-tests:
+    name: OAuth2 + RLS Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: esync
+          POSTGRES_PASSWORD: esync
+          POSTGRES_DB: esync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms256m -Xmx256m"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Hurl
+        run: |
+          VERSION=7.1.0
+          curl --location --remote-name https://github.com/Orange-OpenSource/hurl/releases/download/$VERSION/hurl_${VERSION}_amd64.deb
+          sudo apt-get update && sudo apt-get install -y ./hurl_${VERSION}_amd64.deb
+          hurl --version
+
+      - name: Install Python cryptography (token generation)
+        run: pip3 install cryptography --quiet
+
+      - name: Install psql client
+        run: sudo apt-get install -y postgresql-client
+
+      # ── Database setup ───────────────────────────────────────────────────
+      - name: Create and seed test database
+        env:
+          PGPASSWORD: esync
+        run: |
+          psql -h localhost -U esync -d postgres -c "CREATE DATABASE esync_test;"
+          psql -h localhost -U esync -d esync_test -f scripts/test/setup_test_db.sql
+
+
+      - name: Create esync_app role and enable RLS with test policies
+        env:
+          PGPASSWORD: esync
+        run: |
+          # POSTGRES_USER=esync is a SUPERUSER. Superusers ALWAYS bypass RLS —
+          # ALTER ROLE esync NOBYPASSRLS has no effect on superusers.
+          # Solution: create esync_app as a plain (non-superuser) role and have
+          # the GraphQL server connect as esync_app instead of esync.
+          psql -h localhost -U esync -d esync_test << 'SQL'
+            -- 1. Create a non-superuser application role for the GraphQL server
+            CREATE ROLE esync_app LOGIN PASSWORD 'esync_app'
+              NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+
+            -- 2. Grant table + sequence access
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esync_app;
+            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO esync_app;
+
+            -- 3. Grant SET on custom RLS GUC params (Postgres 15+)
+            DO $$
+            BEGIN
+              IF current_setting('server_version_num')::int >= 150000 THEN
+                EXECUTE 'GRANT SET ON PARAMETER "rls.token_type" TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.user_id"    TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.client_id"  TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.role"       TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.tenant_id"  TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "rls.email"      TO esync_app';
+              END IF;
+            END $$;
+
+            -- 4. Enable and force RLS on products
+            ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE products FORCE ROW LEVEL SECURITY;
+
+            -- 5. Permissive policies: Postgres denies by default when FORCE ROW
+            --    LEVEL SECURITY is set and NO permissive policy matches.
+            --    Anonymous sessions (rls.token_type = 'anonymous') match none of
+            --    the policies below → zero rows returned automatically.
+            --    No RESTRICTIVE policy needed: RESTRICTIVE USING (false) would
+            --    block ALL rows for ALL roles including the ones below.
+
+            -- User token: active products only
+            CREATE POLICY products_user ON products FOR SELECT USING (
+              current_setting('rls.token_type', true) = 'user'
+              AND active = true
+            );
+
+            -- Admin service account: all rows, all operations
+            CREATE POLICY products_admin ON products FOR ALL USING (
+              current_setting('rls.token_type', true) = 'client_credentials'
+              AND current_setting('rls.role', true) = 'admin'
+            );
+
+            -- Tenant-reader service account: active rows, read-only
+            CREATE POLICY products_tenant_reader ON products FOR SELECT USING (
+              current_setting('rls.token_type', true) = 'client_credentials'
+              AND current_setting('rls.role', true) = 'tenant-reader'
+              AND active = true
+            );
+          SQL
+
+          # Verify: show policies and confirm esync_app has no superuser/bypassrls
+          psql -h localhost -U esync -d esync_test << 'SQL'
+            SELECT polname, polpermissive,
+                   pg_get_expr(polqual, polrelid) AS using_expr
+            FROM pg_policy
+            WHERE polrelid = 'products'::regclass
+            ORDER BY polname;
+
+            SELECT rolname, rolsuper, rolbypassrls
+            FROM pg_roles WHERE rolname IN ('esync', 'esync_app');
+          SQL
+
+
+      # ── Token generation ─────────────────────────────────────────────────
+      - name: Generate RSA key pair, JWKS, and test tokens
+        env:
+          OUT_DIR: /tmp/oauth2-test
+          JWKS_ISSUER: http://localhost:8888
+        run: python3 scripts/test/gen_oauth2_tokens.py
+
+      - name: Load token env vars
+        run: |
+          # Source and forward every token into GITHUB_ENV so later steps see them.
+          set -a; source /tmp/oauth2-test/vars.env; set +a
+          echo "USER_TOKEN=${USER_TOKEN}"             >> "$GITHUB_ENV"
+          echo "CC_ADMIN_TOKEN=${CC_ADMIN_TOKEN}"     >> "$GITHUB_ENV"
+          echo "CC_TENANT_TOKEN=${CC_TENANT_TOKEN}"   >> "$GITHUB_ENV"
+          echo "EXPIRED_TOKEN=${EXPIRED_TOKEN}"       >> "$GITHUB_ENV"
+          echo "BAD_SIG_TOKEN=${BAD_SIG_TOKEN}"       >> "$GITHUB_ENV"
+          echo "WRONG_AUD_TOKEN=${WRONG_AUD_TOKEN}"   >> "$GITHUB_ENV"
+          echo "WRONG_ISS_TOKEN=${WRONG_ISS_TOKEN}"   >> "$GITHUB_ENV"
+          echo "DEV_TOKEN=${DEV_TOKEN}"               >> "$GITHUB_ENV"
+
+      # ── Mock JWKS server ─────────────────────────────────────────────────
+      - name: Start mock JWKS server (port 8888)
+        run: |
+          python3 -m http.server 8888 --directory /tmp/oauth2-test &
+          echo $! > /tmp/jwks-server.pid
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:8888/jwks.json > /dev/null && break
+            [ $i -lt 15 ] && sleep 1 || { echo "JWKS server failed to start"; exit 1; }
+          done
+          echo "JWKS server ready"
+
+      # ── Build binary ─────────────────────────────────────────────────────
+      - name: Build esync binary
+        run: cargo build --bin esync
+
+      # ── Write server configs ─────────────────────────────────────────────
+      - name: Write server configs for all three validation modes
+        run: |
+          python3 scripts/test/write_oauth2_configs.py
+
+      # ── Start servers ────────────────────────────────────────────────────
+      - name: Start esync servers (jwks :4002, strict :4003, novalidate :4004)
+        run: |
+          wait_for_server() {
+            local port=$1
+            for i in $(seq 1 30); do
+              curl -sf "http://127.0.0.1:${port}/healthz" > /dev/null && return 0
+              sleep 1
+            done
+            echo "Server on :${port} did not become ready" >&2
+            return 1
+          }
+
+          ESYNC_CONFIG=/tmp/esync-jwks.yaml       ESYNC_LOG=debug ./target/debug/esync serve > /tmp/esync-4002.log 2>&1 &
+          echo $! > /tmp/pid-4002
+          ESYNC_CONFIG=/tmp/esync-strict.yaml     ESYNC_LOG=debug ./target/debug/esync serve > /tmp/esync-4003.log 2>&1 &
+          echo $! > /tmp/pid-4003
+          ESYNC_CONFIG=/tmp/esync-novalidate.yaml ESYNC_LOG=debug ./target/debug/esync serve > /tmp/esync-4004.log 2>&1 &
+          echo $! > /tmp/pid-4004
+
+          wait_for_server 4002
+          wait_for_server 4003
+          wait_for_server 4004
+
+      # ── Hurl test suite ──────────────────────────────────────────────────
+      - name: "[01] Anonymous access — RLS blocks all rows"
+        run: |
+          hurl -v --test \
+            --variable "gql_url=http://127.0.0.1:4002/graphql" \
+            --error-format long \
+            tests/oauth2/01_anonymous.hurl
+
+      - name: "[02] User token — only active products visible"
+        run: |
+          hurl -v --test \
+            --variable "gql_url=http://127.0.0.1:4002/graphql" \
+            --variable "user_token=$USER_TOKEN" \
+            --error-format long \
+            tests/oauth2/02_user_token.hurl
+
+      - name: "[03] Admin CC token — all rows visible including inactive"
+        run: |
+          hurl -v --test \
+            --variable "gql_url=http://127.0.0.1:4002/graphql" \
+            --variable "cc_admin_token=$CC_ADMIN_TOKEN" \
+            --error-format long \
+            tests/oauth2/03_admin_cc_token.hurl
+
+      - name: "[04] Tenant-reader CC token — active rows only"
+        run: |
+          hurl -v --test \
+            --variable "gql_url=http://127.0.0.1:4002/graphql" \
+            --variable "cc_tenant_token=$CC_TENANT_TOKEN" \
+            --error-format long \
+            tests/oauth2/04_tenant_reader_cc_token.hurl
+
+      - name: "[05] get_product by id — RLS applies to single-row lookup"
+        run: |
+          hurl -v --test \
+            --variable "gql_url=http://127.0.0.1:4002/graphql" \
+            --variable "user_token=$USER_TOKEN" \
+            --variable "cc_admin_token=$CC_ADMIN_TOKEN" \
+            --error-format long \
+            tests/oauth2/05_get_by_id_rls.hurl
+
+      - name: "[06] Token rejection — expired / bad-sig / malformed / wrong-aud / wrong-iss"
+        run: |
+          hurl -v --test \
+            --variable "gql_url=http://127.0.0.1:4002/graphql" \
+            --variable "expired_token=$EXPIRED_TOKEN" \
+            --variable "bad_sig_token=$BAD_SIG_TOKEN" \
+            --variable "wrong_aud_token=$WRONG_AUD_TOKEN" \
+            --variable "wrong_iss_token=$WRONG_ISS_TOKEN" \
+            --error-format long \
+            tests/oauth2/06_token_rejection.hurl
+
+      - name: "[07] require_auth strict — no token → 401, valid token → 200"
+        run: |
+          hurl -v --test \
+            --variable "gql_strict_url=http://127.0.0.1:4003/graphql" \
+            --variable "user_token=$USER_TOKEN" \
+            --variable "cc_admin_token=$CC_ADMIN_TOKEN" \
+            --error-format long \
+            tests/oauth2/07_require_auth_strict.hurl
+
+      - name: "[08] validation_mode:none — fake sig accepted, claims flow to RLS"
+        run: |
+          hurl -v --test \
+            --variable "gql_novalidate_url=http://127.0.0.1:4004/graphql" \
+            --variable "dev_token=$DEV_TOKEN" \
+            --error-format long \
+            tests/oauth2/08_validation_none.hurl
+
+      # ── JWKS rotation ─────────────────────────────────────────────────────
+      - name: Rotate JWKS to kid=test-key-2
+        env:
+          OUT_DIR: /tmp/oauth2-test
+          JWKS_ISSUER: http://localhost:8888
+        run: |
+          python3 scripts/test/rotate_jwks.py
+          set -a; source /tmp/oauth2-test/vars_rotated.env; set +a
+          echo "ROTATED_TOKEN=${ROTATED_TOKEN}" >> "$GITHUB_ENV"
+          # Wait for the 1-second JWKS cache TTL to expire so the server
+          # will re-fetch jwks.json on the next request with an unknown kid.
+          sleep 2
+
+      - name: "[09] JWKS rotation — new key accepted, old key rejected"
+        run: |
+          hurl -v --test \
+            --variable "gql_url=http://127.0.0.1:4002/graphql" \
+            --variable "rotated_token=$ROTATED_TOKEN" \
+            --variable "user_token=$USER_TOKEN" \
+            --error-format long \
+            tests/oauth2/09_jwks_rotation.hurl
+
+      # ── Cleanup ──────────────────────────────────────────────────────────
+      - name: Stop all background servers
+        if: always()
+        run: |
+          cat /tmp/esync-4002.log /tmp/esync-4003.log /tmp/esync-4004.log
+          for pidfile in /tmp/pid-4002 /tmp/pid-4003 /tmp/pid-4004 /tmp/jwks-server.pid; do
+            [ -f "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null || true
+          done
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oauth2-test-artifacts
+          path: |
+            /tmp/oauth2-test/jwks.json
+            /tmp/esync-jwks.yaml
+            /tmp/esync-strict.yaml
+            /tmp/esync-novalidate.yaml
+            *.log
+            /tmp/esync-*.log

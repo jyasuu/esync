@@ -60,6 +60,9 @@ pub struct GraphQLConfig {
     pub port: u16,
     #[serde(default = "bool_true")]
     pub playground: bool,
+    /// Optional OAuth2 / JWT authentication configuration.
+    #[serde(default)]
+    pub oauth2: Option<OAuth2Config>,
 }
 fn default_host() -> String {
     "0.0.0.0".into()
@@ -69,6 +72,135 @@ fn default_port() -> u16 {
 }
 fn bool_true() -> bool {
     true
+}
+
+// ── OAuth2 / JWT config ───────────────────────────────────────────────────
+
+/// How tokens should be validated.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationMode {
+    /// Validate JWT locally using JWKS (default).
+    #[default]
+    Jwks,
+    /// Call RFC 7662 token introspection endpoint.
+    Introspect,
+    /// Skip validation — DEV / TEST only. Never use in production.
+    None,
+}
+
+/// Which token type claim to use for client-credential detection.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RlsTokenType {
+    #[default]
+    Auto,
+    ClientCredentials,
+    User,
+}
+
+/// Full OAuth2 authentication + RLS configuration block.
+///
+/// # Minimal YAML example
+/// ```yaml
+/// graphql:
+///   oauth2:
+///     validation_mode: jwks
+///     jwks_uri: "https://auth.example.com/.well-known/jwks.json"
+///     required_issuer: "https://auth.example.com/"
+///     required_audience: "esync-api"
+///     require_auth: true
+///     rls_role_claim: roles          # claim → rls.role  (client-credentials)
+///     rls_user_attributes:           # claims → rls.<attr>  (user tokens)
+///       - sub
+///       - tenant_id
+///       - email
+/// ```
+///
+/// # Full options
+/// ```yaml
+/// graphql:
+///   oauth2:
+///     validation_mode: introspect    # jwks | introspect | none
+///     introspect_endpoint: "https://auth.example.com/oauth/introspect"
+///     client_id: "esync-service"
+///     client_secret: "${OAUTH2_CLIENT_SECRET}"
+///     jwks_uri: "https://auth.example.com/.well-known/jwks.json"
+///     jwks_cache_ttl_secs: 300
+///     required_issuer: "https://auth.example.com/"
+///     required_audience: "esync-api"
+///     clock_skew_secs: 30
+///     require_auth: false            # allow anonymous when no Authorization header
+///     token_type_claim: "gty"        # override auto-detection claim
+///     rls_role_claim: "roles"        # for client-credential tokens
+///     rls_user_attributes:           # for user tokens
+///       - sub
+///       - tenant_id
+///       - email
+///       - department
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OAuth2Config {
+    /// Token validation strategy.
+    #[serde(default)]
+    pub validation_mode: ValidationMode,
+
+    // ── JWKS ─────────────────────────────────────────────────────────────
+    /// JWKS endpoint URI for `validation_mode: jwks`.
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+    /// How long to cache the JWKS response in seconds (default 300).
+    #[serde(default)]
+    pub jwks_cache_ttl_secs: Option<u64>,
+
+    // ── Introspection ─────────────────────────────────────────────────────
+    /// RFC 7662 introspection endpoint for `validation_mode: introspect`.
+    #[serde(default)]
+    pub introspect_endpoint: Option<String>,
+    /// Client ID used for introspection endpoint basic-auth.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// Client secret used for introspection endpoint basic-auth.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+
+    // ── Standard claim validation ─────────────────────────────────────────
+    /// Expected `iss` claim value.  Omit to skip issuer validation.
+    #[serde(default)]
+    pub required_issuer: Option<String>,
+    /// Expected `aud` claim value.  Omit to skip audience validation.
+    #[serde(default)]
+    pub required_audience: Option<String>,
+    /// Allowed clock skew in seconds for `nbf` / `exp` checks (default 30).
+    #[serde(default)]
+    pub clock_skew_secs: Option<u64>,
+
+    // ── Access control ────────────────────────────────────────────────────
+    /// When true, requests without an Authorization header are rejected (401).
+    /// When false (default), they proceed as anonymous with no RLS vars set.
+    #[serde(default)]
+    pub require_auth: bool,
+
+    // ── Token-type detection ──────────────────────────────────────────────
+    /// Name of a claim that carries the grant type for explicit detection.
+    /// Defaults to auto-detection heuristics (`gty`, `grant_type`, presence of
+    /// `client_id` without user-identity claims).
+    #[serde(default)]
+    pub token_type_claim: Option<String>,
+
+    // ── RLS injection — client-credential tokens ──────────────────────────
+    /// Name of the claim whose value becomes `rls.role`.
+    /// Accepts a space-separated list or JSON array — first value is used.
+    /// Default: `"roles"` (falls back to first word of `scope`).
+    #[serde(default)]
+    pub rls_role_claim: Option<String>,
+
+    // ── RLS injection — user tokens ───────────────────────────────────────
+    /// List of claim names to extract from user tokens and expose as
+    /// `SET LOCAL rls.<name> = '<value>'` before each query.
+    /// Example: `[sub, tenant_id, email, department]`
+    #[serde(default)]
+    pub rls_user_attributes: Vec<String>,
 }
 
 // ── Entity config ─────────────────────────────────────────────────────────

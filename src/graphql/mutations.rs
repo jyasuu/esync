@@ -15,7 +15,8 @@
 //! and upserts the ES document so search stays fresh.
 
 use crate::{
-    config::{Config, EntityConfig, PgType},
+    auth::AuthContext,
+    config::{Config, EntityConfig, OAuth2Config, PgType},
     db,
     elastic::EsClient,
     graphql::{pg_to_gql_type_pub, row_to_gql, snake_pub},
@@ -74,6 +75,7 @@ pub fn build_mutation_fields(
     pool: Arc<PgPool>,
     es: Arc<EsClient>,
     cfg: Arc<Config>,
+    oauth2_cfg: Option<Arc<OAuth2Config>>,
 ) -> (Field, Field, Field) {
     let create_tn = create_input_name(entity);
     let update_tn = update_input_name(entity);
@@ -84,6 +86,7 @@ pub fn build_mutation_fields(
     let es_c = Arc::clone(&es);
     let cfg_c = Arc::clone(&cfg);
 
+    let oauth2_c = oauth2_cfg.clone();
     let create_field = Field::new(
         format!("create_{}", snake_pub(&entity.name)),
         TypeRef::named_nn(&entity.name),
@@ -92,7 +95,14 @@ pub fn build_mutation_fields(
             let es = Arc::clone(&es_c);
             let cfg = Arc::clone(&cfg_c);
             let entity = entity_c.clone();
+            let oauth2_cfg = oauth2_c.clone();
             FieldFuture::new(async move {
+                let rls_params = ctx
+                    .data::<AuthContext>()
+                    .ok()
+                    .zip(oauth2_cfg.as_deref())
+                    .map(|(a, c)| a.rls_params(c))
+                    .unwrap_or_default();
                 let input = ctx
                     .args
                     .get("input")
@@ -132,7 +142,9 @@ pub fn build_mutation_fields(
                 }
 
                 let returning: Vec<&str> = entity.columns.iter().map(|c| c.name.as_str()).collect();
-                let row = db::insert_row(&pool, &entity.table, &fields, &returning).await?;
+                let row =
+                    db::insert_row_rls(&pool, &entity.table, &fields, &returning, &rls_params)
+                        .await?;
 
                 let id = extract_id(&row, &entity.id_column);
                 sync_to_es(&pool, &es, &entity, &id, row.clone(), &cfg).await;
@@ -147,6 +159,7 @@ pub fn build_mutation_fields(
     let pool_u = Arc::clone(&pool);
     let es_u = Arc::clone(&es);
     let cfg_u = Arc::clone(&cfg);
+    let oauth2_u = oauth2_cfg.clone();
 
     let update_field = Field::new(
         format!("update_{}", snake_pub(&entity.name)),
@@ -156,7 +169,14 @@ pub fn build_mutation_fields(
             let es = Arc::clone(&es_u);
             let cfg = Arc::clone(&cfg_u);
             let entity = entity_u.clone();
+            let oauth2_cfg = oauth2_u.clone();
             FieldFuture::new(async move {
+                let rls_params = ctx
+                    .data::<AuthContext>()
+                    .ok()
+                    .zip(oauth2_cfg.as_deref())
+                    .map(|(a, c)| a.rls_params(c))
+                    .unwrap_or_default();
                 let id: String = ctx
                     .args
                     .get("id")
@@ -188,13 +208,14 @@ pub fn build_mutation_fields(
 
                 let id_literal = format!("'{}'", id.replace('\'', "''"));
                 let returning: Vec<&str> = entity.columns.iter().map(|c| c.name.as_str()).collect();
-                let row = db::update_row(
+                let row = db::update_row_rls(
                     &pool,
                     &entity.table,
                     &entity.id_column,
                     &id_literal,
                     &fields,
                     &returning,
+                    &rls_params,
                 )
                 .await?;
 
@@ -214,6 +235,7 @@ pub fn build_mutation_fields(
     let entity_d = entity.clone();
     let pool_d = Arc::clone(&pool);
     let es_d = Arc::clone(&es);
+    let oauth2_d = oauth2_cfg.clone();
 
     let delete_field = Field::new(
         format!("delete_{}", snake_pub(&entity.name)),
@@ -222,7 +244,14 @@ pub fn build_mutation_fields(
             let pool = Arc::clone(&pool_d);
             let es = Arc::clone(&es_d);
             let entity = entity_d.clone();
+            let oauth2_cfg = oauth2_d.clone();
             FieldFuture::new(async move {
+                let rls_params = ctx
+                    .data::<AuthContext>()
+                    .ok()
+                    .zip(oauth2_cfg.as_deref())
+                    .map(|(a, c)| a.rls_params(c))
+                    .unwrap_or_default();
                 let id: String = ctx
                     .args
                     .get("id")
@@ -230,8 +259,14 @@ pub fn build_mutation_fields(
                     .ok_or_else(|| async_graphql::Error::new("id is required"))?;
 
                 let id_literal = format!("'{}'", id.replace('\'', "''"));
-                let deleted =
-                    db::delete_row(&pool, &entity.table, &entity.id_column, &id_literal).await?;
+                let deleted = db::delete_row_rls(
+                    &pool,
+                    &entity.table,
+                    &entity.id_column,
+                    &id_literal,
+                    &rls_params,
+                )
+                .await?;
 
                 if deleted {
                     if let Err(e) = es.delete_document(&entity.index, &id).await {

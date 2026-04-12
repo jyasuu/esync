@@ -3,7 +3,8 @@ pub mod search;
 pub mod subscriptions;
 
 use crate::{
-    config::{Config, EntityConfig, PgType, RelationConfig, RelationKind},
+    auth::AuthContext,
+    config::{Config, EntityConfig, OAuth2Config, PgType, RelationConfig, RelationKind},
     elastic::EsClient,
 };
 use anyhow::Result;
@@ -29,6 +30,11 @@ pub fn build_schema(
     broadcaster: Arc<subscriptions::Broadcaster>,
 ) -> Result<Schema> {
     let cfg = Arc::new(cfg.clone());
+
+    // Shared OAuth2 config arc for RLS param injection in resolvers.
+    let oauth2_cfg: Option<Arc<OAuth2Config>> =
+        cfg.graphql.oauth2.as_ref().map(|c| Arc::new(c.clone()));
+
     let mut query = Object::new("Query");
     let mut mutation = Object::new("Mutation");
     let mut subscription = Subscription::new("Subscription");
@@ -45,11 +51,11 @@ pub fn build_schema(
         builder = builder.register(obj);
 
         // ── list_<entity> query ───────────────────────────────────────────
-        let list_field = build_list_field(&entity, Arc::clone(&pool));
+        let list_field = build_list_field(&entity, Arc::clone(&pool), oauth2_cfg.clone());
         query = query.field(list_field);
 
         // ── get_<entity> query ────────────────────────────────────────────
-        let get_field = build_get_field(&entity, Arc::clone(&pool));
+        let get_field = build_get_field(&entity, Arc::clone(&pool), oauth2_cfg.clone());
         query = query.field(get_field);
 
         // ── mutations (skipped for read-only / sql-backed entities) ───────
@@ -62,6 +68,7 @@ pub fn build_schema(
                 Arc::clone(&pool),
                 Arc::clone(&es),
                 Arc::clone(&cfg),
+                oauth2_cfg.clone(),
             );
             mutation = mutation.field(create_f).field(update_f).field(delete_f);
             has_mutations = true;
@@ -307,7 +314,11 @@ async fn fetch_with_order(
 
 // ── list / get query fields ───────────────────────────────────────────────
 
-fn build_list_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
+fn build_list_field(
+    entity: &EntityConfig,
+    pool: Arc<PgPool>,
+    oauth2_cfg: Option<Arc<OAuth2Config>>,
+) -> Field {
     let entity_c = entity.clone();
     let list_name = format!("list_{}", snake_pub(&entity.name));
 
@@ -317,6 +328,7 @@ fn build_list_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
         move |ctx| {
             let pool = Arc::clone(&pool);
             let entity = entity_c.clone();
+            let oauth2_cfg = oauth2_cfg.clone();
             FieldFuture::new(async move {
                 let limit: i64 = ctx
                     .args
@@ -332,7 +344,6 @@ fn build_list_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
                     .args
                     .get("search")
                     .and_then(|v| v.string().ok().map(str::to_owned));
-                // Extra ad-hoc filter (SQL WHERE fragment)
                 let extra_filter = ctx
                     .args
                     .get("filter")
@@ -346,13 +357,23 @@ fn build_list_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
                     .collect();
 
                 let filter = build_filter(&entity, search.as_deref(), extra_filter.as_deref());
-                let rows = crate::db::fetch_rows(
+
+                // Build RLS params from the AuthContext attached to this request.
+                let rls_params = ctx
+                    .data::<AuthContext>()
+                    .ok()
+                    .zip(oauth2_cfg.as_deref())
+                    .map(|(auth, cfg)| auth.rls_params(cfg))
+                    .unwrap_or_default();
+
+                let rows = crate::db::fetch_rows_rls(
                     &pool,
                     &entity.source_sql(),
                     &cols,
                     filter.as_deref(),
                     limit,
                     offset,
+                    &rls_params,
                 )
                 .await?;
 
@@ -368,13 +389,18 @@ fn build_list_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
     .argument(InputValue::new("filter", TypeRef::named(TypeRef::STRING)))
 }
 
-fn build_get_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
+fn build_get_field(
+    entity: &EntityConfig,
+    pool: Arc<PgPool>,
+    oauth2_cfg: Option<Arc<OAuth2Config>>,
+) -> Field {
     let entity_g = entity.clone();
     let get_name = format!("get_{}", snake_pub(&entity.name));
 
     Field::new(get_name, TypeRef::named(&entity.name), move |ctx| {
         let pool = Arc::clone(&pool);
         let entity = entity_g.clone();
+        let oauth2_cfg = oauth2_cfg.clone();
         FieldFuture::new(async move {
             let id: String = ctx
                 .args
@@ -390,9 +416,24 @@ fn build_get_field(entity: &EntityConfig, pool: Arc<PgPool>) -> Field {
                 .collect();
 
             let filter = format!("{} = '{}'", entity.id_column, id.replace('\'', "''"));
-            let mut rows =
-                crate::db::fetch_rows(&pool, &entity.source_sql(), &cols, Some(&filter), 1, 0)
-                    .await?;
+
+            let rls_params = ctx
+                .data::<AuthContext>()
+                .ok()
+                .zip(oauth2_cfg.as_deref())
+                .map(|(auth, cfg)| auth.rls_params(cfg))
+                .unwrap_or_default();
+
+            let mut rows = crate::db::fetch_rows_rls(
+                &pool,
+                &entity.source_sql(),
+                &cols,
+                Some(&filter),
+                1,
+                0,
+                &rls_params,
+            )
+            .await?;
 
             Ok(rows.pop().map(row_to_gql))
         })

@@ -1,11 +1,15 @@
+use crate::auth::{AuthContext, ExtractAuth, TokenValidator};
 use crate::graphql::subscriptions::{spawn_cdc_listener, Broadcaster};
 use crate::{config::Config, db, elastic::EsClient, graphql};
 use anyhow::Result;
 use async_graphql::http::{GraphiQLSource, ALL_WEBSOCKET_PROTOCOLS};
 use async_graphql_axum::{GraphQLProtocol, GraphQLRequest, GraphQLResponse, GraphQLWebSocket};
+use axum::http::Request;
 use axum::{
     extract::State,
-    response::{Html, IntoResponse},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Router,
 };
@@ -14,13 +18,10 @@ use std::sync::Arc;
 
 #[derive(Args, Debug)]
 pub struct ServeArgs {
-    /// Override listen host
     #[arg(long)]
     pub host: Option<String>,
-    /// Override listen port
     #[arg(long, short)]
     pub port: Option<u16>,
-    /// Disable GraphiQL playground
     #[arg(long)]
     pub no_playground: bool,
 }
@@ -31,12 +32,12 @@ type DynSchema = async_graphql::dynamic::Schema;
 struct AppState {
     schema: Arc<DynSchema>,
     playground: bool,
+    validator: Option<Arc<TokenValidator>>,
 }
 
 pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
     let pool = Arc::new(db::connect(&cfg.postgres.url, cfg.postgres.pool_size).await?);
 
-    // Connect to ES if any entity needs it
     let needs_es = cfg
         .entities
         .iter()
@@ -47,11 +48,7 @@ pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
         Arc::new(EsClient::new_noop())
     };
 
-    // Build the subscription broadcaster — one channel per writable entity
     let broadcaster = Arc::new(Broadcaster::new(&cfg));
-
-    // Spin up an embedded CDC listener so subscriptions work without a
-    // separate `esync watch` process.
     let cfg_arc = Arc::new(cfg.clone());
     let _cdc_handle = spawn_cdc_listener(
         Arc::clone(&cfg_arc),
@@ -67,6 +64,15 @@ pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
         Arc::clone(&broadcaster),
     )?);
 
+    let validator: Option<Arc<TokenValidator>> = cfg.graphql.oauth2.as_ref().map(|oauth2_cfg| {
+        tracing::info!(
+            mode = ?oauth2_cfg.validation_mode,
+            require_auth = oauth2_cfg.require_auth,
+            "OAuth2 authentication enabled"
+        );
+        Arc::new(TokenValidator::new(Arc::new(oauth2_cfg.clone())))
+    });
+
     let host = args
         .host
         .as_deref()
@@ -75,13 +81,21 @@ pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
     let port = args.port.unwrap_or(cfg.graphql.port);
     let playground = cfg.graphql.playground && !args.no_playground;
 
-    let state = AppState { schema, playground };
+    let state = AppState {
+        schema,
+        playground,
+        validator: validator.clone(),
+    };
 
     let app = Router::new()
         .route("/graphql", post(graphql_handler))
         .route("/graphql/ws", get(graphql_ws_handler))
         .route("/graphql", get(playground_handler))
         .route("/healthz", get(health_handler))
+        .layer(middleware::from_fn_with_state(
+            validator.clone(),
+            inject_validator_middleware,
+        ))
         .with_state(state)
         .layer(tower_http::cors::CorsLayer::permissive());
 
@@ -97,8 +111,25 @@ pub async fn run(cfg: Config, args: ServeArgs) -> Result<()> {
     Ok(())
 }
 
-async fn graphql_handler(State(state): State<AppState>, req: GraphQLRequest) -> GraphQLResponse {
-    state.schema.execute(req.into_inner()).await.into()
+async fn inject_validator_middleware(
+    State(validator): State<Option<Arc<TokenValidator>>>,
+    mut req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if let Some(v) = validator {
+        req.extensions_mut().insert(v);
+    }
+    next.run(req).await
+}
+
+async fn graphql_handler(
+    State(state): State<AppState>,
+    ExtractAuth(auth_ctx): ExtractAuth,
+    req: GraphQLRequest,
+) -> Result<GraphQLResponse, (StatusCode, String)> {
+    let mut inner = req.into_inner();
+    inner = inner.data(auth_ctx);
+    Ok(state.schema.execute(inner).await.into())
 }
 
 async fn graphql_ws_handler(
@@ -107,10 +138,48 @@ async fn graphql_ws_handler(
     websocket: axum::extract::WebSocketUpgrade,
 ) -> impl IntoResponse {
     let schema = Arc::clone(&state.schema);
+    let validator = state.validator.clone();
+
     websocket
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
-        .on_upgrade(move |stream| {
-            GraphQLWebSocket::new(stream, schema.as_ref().clone(), protocol).serve()
+        .on_upgrade(move |stream| async move {
+            GraphQLWebSocket::new(stream, schema.as_ref().clone(), protocol)
+                .on_connection_init(move |params| {
+                    let validator = validator.clone();
+                    async move {
+                        let token = params
+                            .get("Authorization")
+                            .or_else(|| params.get("authorization"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim_start_matches("Bearer ")
+                            .trim()
+                            .to_owned();
+
+                        let auth_ctx = if token.is_empty() || validator.is_none() {
+                            AuthContext::anonymous()
+                        } else {
+                            match validator {
+                                Some(v) => match v.validate(&token).await {
+                                    Ok(ctx) => ctx,
+                                    Err(e) => {
+                                        tracing::warn!("WS token validation failed: {e}");
+                                        return Err(async_graphql::Error::new(format!(
+                                            "Unauthorized: {e}"
+                                        )));
+                                    }
+                                },
+                                None => AuthContext::anonymous(),
+                            }
+                        };
+
+                        let mut data = async_graphql::Data::default();
+                        data.insert(auth_ctx);
+                        Ok(data)
+                    }
+                })
+                .serve()
+                .await
         })
 }
 
