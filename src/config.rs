@@ -195,9 +195,26 @@ pub struct OAuth2Config {
     #[serde(default)]
     pub rls_role_claim: Option<String>,
 
+    /// Dot-separated path to a nested roles array.
+    /// Use this for Keycloak which stores roles at `realm_access.roles`.
+    ///
+    /// Examples:
+    ///   `rls_role_claim_path: "realm_access.roles"`           # Keycloak realm roles
+    ///   `rls_role_claim_path: "resource_access.my-api.roles"` # Keycloak client roles
+    ///
+    /// When set, takes precedence over `rls_role_claim`.
+    #[serde(default)]
+    pub rls_role_claim_path: Option<String>,
+
+    /// Use the `azp` (authorized party) claim as `rls.client_id` instead of
+    /// `client_id`. Keycloak client-credentials tokens carry the client ID in
+    /// `azp`, not `client_id`. Default: false.
+    #[serde(default)]
+    pub azp_as_client_id: bool,
+
     // ── RLS injection — user tokens ───────────────────────────────────────
     /// List of claim names to extract from user tokens and expose as
-    /// `SET LOCAL rls.<name> = '<value>'` before each query.
+    /// `SET LOCAL rls.<n> = '<value>'` before each query.
     /// Example: `[sub, tenant_id, email, department]`
     #[serde(default)]
     pub rls_user_attributes: Vec<String>,

@@ -364,6 +364,13 @@ impl TokenValidator {
             .and_then(Value::as_str)
             .unwrap_or("");
 
+        // Keycloak service-account preferred_username always starts with "service-account-".
+        let preferred_username = claims
+            .get("preferred_username")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let is_keycloak_service_account = preferred_username.starts_with("service-account-");
+
         let is_client_cred = grant_type.contains("client_credentials")
             || match &self.cfg.token_type_claim {
                 Some(claim) => claims
@@ -373,9 +380,19 @@ impl TokenValidator {
                     .unwrap_or(false),
                 None => false,
             }
+            // Standard: explicit client_id claim without user-identity claims
             || (claims.get("client_id").is_some()
                 && claims.get("username").is_none()
                 && claims.get("preferred_username").is_none()
+                && claims.get("email").is_none())
+            // Keycloak service account: preferred_username is "service-account-<clientId>",
+            // and clientHost / clientAddress are present (machine, not human session).
+            || is_keycloak_service_account
+            // Keycloak client-credentials without service-account username:
+            // has azp + clientId (capital I) but no session_state and no email.
+            || (claims.get("azp").is_some()
+                && claims.get("clientId").is_some()   // Keycloak adds clientId (capital I)
+                && claims.get("session_state").is_none()
                 && claims.get("email").is_none());
 
         // Flatten all scalar claims into a string map.
@@ -398,20 +415,50 @@ impl TokenValidator {
         }
 
         if is_client_cred {
-            let client_id = claims
-                .get("client_id")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| sub.clone());
+            // Client ID resolution — checked in order:
+            //   1. azp_as_client_id=true → use `azp` (Keycloak: authorized party = client name)
+            //   2. `client_id` (standard OAuth2 lowercase)
+            //   3. `clientId` (Keycloak capital-I variant, present in service-account tokens)
+            //   4. `azp` fallback
+            //   5. `sub` last resort
+            let client_id = if self.cfg.azp_as_client_id {
+                claims.get("azp").and_then(Value::as_str).map(str::to_owned)
+            } else {
+                claims
+                    .get("client_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            }
+            .or_else(|| {
+                claims
+                    .get("clientId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .or_else(|| claims.get("azp").and_then(Value::as_str).map(str::to_owned))
+            .or_else(|| sub.clone());
 
-            // Role: check configured claim, then fall back to first scope word.
-            let role_claim = self.cfg.rls_role_claim.as_deref().unwrap_or("roles");
-            let role = claims
-                .get(role_claim)
+            // Role extraction — three sources checked in order:
+            //   1. rls_role_claim_path  — dot-path for nested claims (Keycloak: "realm_access.roles")
+            //   2. rls_role_claim       — top-level claim name (Auth0/Azure: "roles")
+            //   3. scope                — first word of the space-separated scope string
+            let role = self
+                .cfg
+                .rls_role_claim_path
+                .as_deref()
+                .and_then(|path| resolve_claim_path(&claims, path))
                 .and_then(|v| match v {
-                    Value::String(s) => Some(s.split_whitespace().next()?.to_owned()),
                     Value::Array(arr) => arr.first().and_then(Value::as_str).map(str::to_owned),
+                    Value::String(s) => Some(s.clone()),
                     _ => None,
+                })
+                .or_else(|| {
+                    let role_claim = self.cfg.rls_role_claim.as_deref().unwrap_or("roles");
+                    claims.get(role_claim).and_then(|v| match v {
+                        Value::String(s) => Some(s.split_whitespace().next()?.to_owned()),
+                        Value::Array(arr) => arr.first().and_then(Value::as_str).map(str::to_owned),
+                        _ => None,
+                    })
                 })
                 .or_else(|| {
                     claims
@@ -437,6 +484,18 @@ impl TokenValidator {
             }
         }
     }
+}
+
+// ── Claim path resolver ───────────────────────────────────────────────────
+
+/// Resolve a dot-separated path like `"realm_access.roles"` into the nested
+/// `serde_json::Value` it points to, returning `None` if any segment is missing.
+fn resolve_claim_path<'a>(claims: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = claims;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
 }
 
 // ── RSA-SHA256 signature verification via `rsa` crate ───────────────────
