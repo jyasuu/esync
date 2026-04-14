@@ -242,7 +242,7 @@ jobs:
             DO $$
             BEGIN
               IF current_setting('server_version_num')::int >= 150000 THEN
-EXECUTE 'GRANT SET ON PARAMETER "request.jwt.claims" TO esync_app';
+                EXECUTE 'GRANT SET ON PARAMETER "request.jwt.claims" TO esync_app';
               END IF;
             END $$;
 
