@@ -1,141 +1,146 @@
 # Keycloak Integration Guide
 
-## Keycloak JWT structure
+## How esync injects JWT claims into Postgres
 
-A Keycloak access token has a different shape from Auth0 / Azure AD tokens.
-The key differences that affect esync RLS config:
+esync sets **two** Postgres GUC parameters via `SET LOCAL` before each query:
+
+| Parameter | Value | Usage |
+|---|---|---|
+| `request.jwt.token_type` | `"user"` / `"client_credentials"` / `"anonymous"` | Cheap string comparison to branch policy |
+| `request.jwt.claims` | Full JWT payload as compact JSON string | Extract any claim with `::jsonb` operators |
+
+This is the same convention as **PostgREST** — existing PostgREST-style RLS policies work unchanged.
+
+---
+
+## Keycloak JWT structure
 
 ```jsonc
 {
-  "iss": "https://iam.example.com/realms/service",  // realm URL, not just host
-  "sub": "f33d74d4-a5ed-4da0-817c-...",             // user UUID
-  "azp": "esync-svc",                               // client ID (NOT client_id)
-  "preferred_username": "alice",                     // present for users, absent for service accounts
-  "email": "alice@example.com",                     // present for users only
-  "session_state": "f853...",                       // present for interactive sessions only
-
-  // Realm roles (all clients in the realm)
+  "iss": "https://iam.example.com/auth/realms/service",
+  "sub": "122a0443-3ec5-4e7f-9f76-72d1bc948ffc",
+  "azp": "mda-service-3pnmx2sr",          // client ID (service account)
+  "preferred_username": "service-account-mda-service-3pnmx2sr",
   "realm_access": {
-    "roles": ["admin", "offline_access", "uma_authorization"]
+    "roles": ["offline_access", "uma_authorization", "admin"]
   },
-
-  // Client roles (scoped to one client)
   "resource_access": {
-    "esync-api": {
-      "roles": ["data-reader"]
-    }
+    "my-api": { "roles": ["data-reader"] }
   }
 }
 ```
 
-**Client-credentials tokens** (service accounts) have `azp` but **no**
-`preferred_username`, `email`, or `session_state` — esync auto-detects these as
-`token_type = "client_credentials"`.
-
-**User tokens** have `preferred_username`, `email`, and `session_state`.
+esync auto-detects service accounts by `preferred_username` starting with `"service-account-"`.
 
 ---
 
-## esync.yaml config
+## esync.yaml — minimal config
 
 ```yaml
 graphql:
   oauth2:
     validation_mode: jwks
-
-    # Keycloak 17+ (no /auth prefix):
-    jwks_uri: "https://iam.example.com/realms/service/protocol/openid-connect/certs"
-    # Keycloak ≤ 16:
-    # jwks_uri: "https://iam.example.com/auth/realms/service/protocol/openid-connect/certs"
-
-    required_issuer: "https://iam.example.com/realms/service"
-    required_audience: "esync-api"   # your resource server client ID, or omit
-
-    # Keycloak-specific settings:
-    rls_role_claim_path: "realm_access.roles"   # nested path, not a top-level claim
-    azp_as_client_id: true                       # Keycloak uses azp, not client_id
-
-    rls_user_attributes:
-      - sub
-      - preferred_username
-      - email
-      - tenant_id   # add via Keycloak User Attribute mapper
-```
-
-### Using client roles instead of realm roles
-
-```yaml
-# Pick the first role from the esync-api client scope:
-rls_role_claim_path: "resource_access.esync-api.roles"
+    jwks_uri: "https://iam.example.com/auth/realms/service/protocol/openid-connect/certs"
+    required_issuer: "https://iam.example.com/auth/realms/service"
+    require_auth: true
+    # That's it. No rls_role_claim, no rls_user_attributes.
+    # Policies use ::jsonb to extract whatever they need.
 ```
 
 ---
 
-## Keycloak admin setup
+## Postgres RLS policies
 
-### 1. Create a realm (if needed)
-Admin console → Create Realm → name it `service`
-
-### 2. Create a resource server client
-- Clients → Create → Client ID: `esync-api`
-- Client Protocol: `openid-connect`
-- Access Type: `bearer-only` (it only validates tokens, doesn't issue them)
-
-### 3. Create a service account client  
-- Clients → Create → Client ID: `esync-svc`
-- Access Type: `confidential`
-- Service Accounts Enabled: ON
-- Copy the secret from the Credentials tab
-
-### 4. Assign realm roles to the service account
-- Clients → `esync-svc` → Service Account Roles
-- Assign realm roles: `admin` (or your custom role)
-
-### 5. Add custom user attributes as token claims
-For `tenant_id` in user tokens:
-- Clients → `esync-api` → Mappers → Create
-  - Mapper Type: `User Attribute`
-  - User Attribute: `tenant_id`
-  - Token Claim Name: `tenant_id`
-  - Claim JSON Type: `String`
-  - Add to access token: ON
-
-### 6. Postgres RLS policies
+### Branch on token type (fast, no JSON parsing)
 
 ```sql
--- Service account with realm role 'admin' sees everything
-CREATE POLICY orders_admin ON orders FOR ALL USING (
-  current_setting('rls.token_type', true) = 'client_credentials'
-  AND current_setting('rls.role', true) = 'admin'
+current_setting('request.jwt.token_type', true) = 'user'
+current_setting('request.jwt.token_type', true) = 'client_credentials'
+```
+
+### Extract any claim
+
+```sql
+-- sub (user UUID)
+current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
+
+-- azp (Keycloak service account client ID)
+current_setting('request.jwt.claims', true)::jsonb ->> 'azp'
+
+-- preferred_username
+current_setting('request.jwt.claims', true)::jsonb ->> 'preferred_username'
+
+-- Keycloak realm role (array contains check)
+current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ? 'admin'
+
+-- Keycloak client role
+current_setting('request.jwt.claims', true)::jsonb -> 'resource_access' -> 'my-api' -> 'roles' ? 'data-reader'
+
+-- Custom claim (add via Keycloak mapper)
+current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
+```
+
+### Full policy examples
+
+```sql
+-- Users see only their own orders
+CREATE POLICY orders_own ON orders FOR SELECT USING (
+  current_setting('request.jwt.token_type', true) = 'user'
+  AND user_id::text = (
+    current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
+  )
 );
 
--- Authenticated users see only their own orders
-CREATE POLICY orders_user ON orders FOR SELECT USING (
-  current_setting('rls.token_type', true) = 'user'
-  AND user_id::text = current_setting('rls.sub', true)
+-- Service account with Keycloak realm role 'admin' sees everything
+CREATE POLICY orders_admin ON orders FOR ALL USING (
+  current_setting('request.jwt.token_type', true) = 'client_credentials'
+  AND current_setting('request.jwt.claims', true)::jsonb
+      -> 'realm_access' -> 'roles' ? 'admin'
+);
+
+-- Service account with client role 'data-reader' sees active orders only
+CREATE POLICY orders_reader ON orders FOR SELECT USING (
+  current_setting('request.jwt.token_type', true) = 'client_credentials'
+  AND current_setting('request.jwt.claims', true)::jsonb
+      -> 'resource_access' -> 'my-api' -> 'roles' ? 'data-reader'
+);
+
+-- Multi-tenant: users see their tenant's rows (custom claim)
+CREATE POLICY products_tenant ON products FOR SELECT USING (
+  current_setting('request.jwt.token_type', true) = 'user'
+  AND tenant_id::text = (
+    current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
+  )
 );
 ```
 
 ---
 
-## Running the Hurl tests
+## Postgres setup
+
+```sql
+-- Non-superuser role for the GraphQL server
+CREATE ROLE esync_app LOGIN PASSWORD 'change_me' NOSUPERUSER NOBYPASSRLS;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esync_app;
+
+-- Postgres 15+: grant SET permission for the two GUC params
+GRANT SET ON PARAMETER "request.jwt.claims"     TO esync_app;
+GRANT SET ON PARAMETER "request.jwt.token_type" TO esync_app;
+
+-- Enable RLS
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;
+```
+
+---
+
+## Hurl test
 
 ```bash
-# Client-credentials (service account)
 hurl --variable "keycloak_url=https://iam.example.com" \
      --variable "realm=service" \
-     --variable "client_id=esync-svc" \
+     --variable "client_id=mda-service-3pnmx2sr" \
      --variable "client_secret=<secret>" \
      --variable "gql_url=http://localhost:4000/graphql" \
      examples/keycloak/keycloak_cc.hurl
-
-# User token (requires Direct Access Grants enabled on client)
-hurl --variable "keycloak_url=https://iam.example.com" \
-     --variable "realm=service" \
-     --variable "client_id=esync-frontend" \
-     --variable "client_secret=<secret>" \
-     --variable "username=testuser@example.com" \
-     --variable "password=<pass>" \
-     --variable "gql_url=http://localhost:4000/graphql" \
-     examples/keycloak/keycloak_user.hurl
 ```

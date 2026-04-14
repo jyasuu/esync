@@ -242,12 +242,7 @@ jobs:
             DO $$
             BEGIN
               IF current_setting('server_version_num')::int >= 150000 THEN
-                EXECUTE 'GRANT SET ON PARAMETER "rls.token_type" TO esync_app';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.user_id"    TO esync_app';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.client_id"  TO esync_app';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.role"       TO esync_app';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.tenant_id"  TO esync_app';
-                EXECUTE 'GRANT SET ON PARAMETER "rls.email"      TO esync_app';
+EXECUTE 'GRANT SET ON PARAMETER "request.jwt.claims" TO esync_app';
               END IF;
             END $$;
 
@@ -257,28 +252,40 @@ jobs:
 
             -- 5. Permissive policies: Postgres denies by default when FORCE ROW
             --    LEVEL SECURITY is set and NO permissive policy matches.
-            --    Anonymous sessions (rls.token_type = 'anonymous') match none of
+            --    Anonymous sessions have empty claims {} — sub IS NOT NULL fails → no rows
             --    the policies below → zero rows returned automatically.
             --    No RESTRICTIVE policy needed: RESTRICTIVE USING (false) would
             --    block ALL rows for ALL roles including the ones below.
 
-            -- User token: active products only
+            -- Policies use request.jwt.claims ::jsonb directly.
+            -- No token_type abstraction — policies query JWT claims they care about.
+
+            -- Any authenticated user (has a 'sub' claim): sees active products.
             CREATE POLICY products_user ON products FOR SELECT USING (
-              current_setting('rls.token_type', true) = 'user'
+              current_setting('request.jwt.claims', true)::jsonb ->> 'sub' IS NOT NULL
+              AND current_setting('request.jwt.claims', true)::jsonb ->> 'sub' != ''
               AND active = true
             );
 
-            -- Admin service account: all rows, all operations
+            -- Service account with 'admin' in realm_access.roles or flat roles: all rows.
             CREATE POLICY products_admin ON products FOR ALL USING (
-              current_setting('rls.token_type', true) = 'client_credentials'
-              AND current_setting('rls.role', true) = 'admin'
+              current_setting('request.jwt.claims', true)::jsonb
+                -> 'realm_access' -> 'roles' ? 'admin'
+              OR
+              current_setting('request.jwt.claims', true)::jsonb
+                -> 'roles' ? 'admin'
             );
 
-            -- Tenant-reader service account: active rows, read-only
+            -- Service account with 'tenant-reader' role: active rows only.
             CREATE POLICY products_tenant_reader ON products FOR SELECT USING (
-              current_setting('rls.token_type', true) = 'client_credentials'
-              AND current_setting('rls.role', true) = 'tenant-reader'
-              AND active = true
+              active = true
+              AND (
+                current_setting('request.jwt.claims', true)::jsonb
+                  -> 'realm_access' -> 'roles' ? 'tenant-reader'
+                OR
+                current_setting('request.jwt.claims', true)::jsonb
+                  -> 'roles' ? 'tenant-reader'
+              )
             );
           SQL
 

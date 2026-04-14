@@ -2,159 +2,171 @@
 
 ## Overview
 
-esync now supports OAuth2/JWT authentication on the GraphQL endpoint.
-Every request is validated, claims are extracted, and mapped to
-`SET LOCAL rls.*` parameters inside each Postgres transaction — so
-your Row Level Security policies can enforce fine-grained access control
-without any application-layer filtering.
+esync validates OAuth2/JWT tokens and injects the full claims payload into
+two Postgres GUC parameters before each query.  RLS policies use standard
+`::jsonb` operators to extract whatever they need — no esync config changes
+required as policies evolve.
+
+This is the same convention used by **PostgREST**, so existing PostgREST-style
+policies work without modification.
 
 ```
 GraphQL client
     │  Bearer <token>
     ▼
 ┌──────────────────────────────┐
-│  Axum middleware             │
-│  TokenValidator              │  ← validates JWT or introspects
-│  → AuthContext               │
+│  TokenValidator              │  validates JWT / introspects
+│  build_auth_context()        │  detects token type
+│  → AuthContext {             │
+│      raw_claims: JSON string }│
 └──────────────┬───────────────┘
-               │ ctx.data::<AuthContext>()
+               │ auth.rls_params(cfg)
                ▼
-┌──────────────────────────────┐
-│  GraphQL resolver            │
-│  auth.rls_params(cfg)        │  ← builds SET LOCAL statements
-│  db::fetch_rows_rls(...)     │
-└──────────────┬───────────────┘
-               │ BEGIN
-               │ SET LOCAL rls.token_type = 'user'
-               │ SET LOCAL rls.user_id    = 'abc-123'
-               │ SET LOCAL rls.tenant_id  = 'acme'
-               │ SELECT ...  ← Postgres RLS policy fires here
-               │ COMMIT
-               ▼
-         PostgreSQL
+┌──────────────────────────────────────────────────────┐
+│  BEGIN                                               │
+│  SET LOCAL request.jwt.claims = '{"sub":"...","realm_access":{...},...}'
+│  SELECT ... FROM products WHERE ...                  │  ← RLS policies fire
+│  COMMIT                                              │
+└──────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Configuration
 
-Add an `oauth2` block inside `graphql:` in `esync.yaml`.
-
-### Option A — JWKS (recommended for production)
+Minimal config — works with any OAuth2/OIDC provider:
 
 ```yaml
 graphql:
-  host: "0.0.0.0"
-  port: 4000
-  playground: true
-
   oauth2:
     validation_mode: jwks
     jwks_uri: "https://auth.example.com/.well-known/jwks.json"
-    jwks_cache_ttl_secs: 300
-
-    required_issuer:   "https://auth.example.com/"
-    required_audience: "esync-api"
-    clock_skew_secs: 30
-
+    required_issuer: "https://auth.example.com/"
+    required_audience: "esync-api"   # omit to skip audience check
     require_auth: true
 
-    # Client-credential tokens
-    rls_role_claim: "roles"
-
-    # User tokens
-    rls_user_attributes:
-      - sub
-      - tenant_id
-      - email
-      - department
+    # Optional: change the GUC parameter names (defaults shown)
+    # jwt_claims_param: "request.jwt.claims"   # default, PostgREST-compatible
 ```
 
-### Option B — Token introspection (opaque tokens / Keycloak)
+That's it. No `rls_role_claim`, no `rls_user_attributes`. Policies read directly from the JWT.
+
+### Keycloak
 
 ```yaml
 graphql:
   oauth2:
-    validation_mode: introspect
-    introspect_endpoint: "https://auth.example.com/oauth/introspect"
-    client_id:     "esync-service"
-    client_secret: "${OAUTH2_CLIENT_SECRET}"
-    required_issuer: "https://auth.example.com/"
-    require_auth: false
-    rls_role_claim: "roles"
-    rls_user_attributes: [sub, tenant_id]
+    validation_mode: jwks
+    jwks_uri: "https://iam.example.com/auth/realms/service/protocol/openid-connect/certs"
+    required_issuer: "https://iam.example.com/auth/realms/service"
+    require_auth: true
+    # No Keycloak-specific options needed — token-type detection is automatic.
 ```
 
-### Option C — Disabled (default, fully backward-compatible)
+### Validation modes
 
-Omit the `oauth2:` block entirely. All requests proceed as anonymous.
+| `validation_mode` | Description |
+|---|---|
+| `jwks` (default) | Validate RS256 JWT signature via remote JWKS URL |
+| `introspect` | RFC 7662 token introspection (for opaque tokens) |
+| `none` | Skip validation — dev/test only |
 
 ---
 
-## Token-type detection
+## GUC parameter set per request
 
-esync auto-detects machine vs. user tokens:
-
-| Signal | Result |
+| Parameter | Value |
 |---|---|
-| `gty`/`grant_type` claim contains `"client_credentials"` | client_credentials |
-| `token_type_claim` config matches `"client_credentials"` | client_credentials |
-| `client_id` present AND no user-identity claims | client_credentials |
-| Anything else | user |
+| `request.jwt.claims` | Full JWT payload as compact JSON string |
+
+Anonymous requests (no token) set `request.jwt.claims = '{}'`.
 
 ---
 
-## RLS variables injected per token type
+## RLS policy patterns
 
-### Client-credential token
+### Extract any top-level claim
 
-| Postgres variable | Source |
-|---|---|
-| `rls.token_type` | `"client_credentials"` |
-| `rls.client_id` | `client_id` claim (fallback: `sub`) |
-| `rls.role` | first value of `rls_role_claim` / first word of `scope` |
+```sql
+current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
+current_setting('request.jwt.claims', true)::jsonb ->> 'azp'
+current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
+current_setting('request.jwt.claims', true)::jsonb ->> 'email'
+```
 
-### User token
+### Nested claims (Keycloak)
 
-| Postgres variable | Source |
-|---|---|
-| `rls.token_type` | `"user"` |
-| `rls.user_id` | `sub` claim |
-| `rls.<attr>` | each item in `rls_user_attributes` |
+```sql
+-- Check if realm_access.roles array contains a value
+current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ? 'admin'
+
+-- Check if resource_access.<client>.roles contains a value
+current_setting('request.jwt.claims', true)::jsonb -> 'resource_access' -> 'my-api' -> 'roles' ? 'data-reader'
+
+-- Get first realm role as a string
+current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ->> 0
+```
+
+### Complete policy examples
+
+```sql
+-- Users see only their own rows
+CREATE POLICY orders_own ON orders FOR SELECT USING (
+  current_setting('request.jwt.token_type', true) = 'user'
+  AND user_id::text = (
+    current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
+  )
+);
+
+-- Multi-tenant: users see their tenant (custom claim from IdP mapper)
+CREATE POLICY products_tenant ON products FOR SELECT USING (
+  current_setting('request.jwt.token_type', true) = 'user'
+  AND tenant_id::text = (
+    current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
+  )
+);
+
+-- Keycloak service account with realm role 'admin' sees everything
+CREATE POLICY orders_admin ON orders FOR ALL USING (
+  current_setting('request.jwt.token_type', true) = 'client_credentials'
+  AND current_setting('request.jwt.claims', true)::jsonb
+      -> 'realm_access' -> 'roles' ? 'admin'
+);
+
+-- Same policy, flat-roles IdP (Auth0, Azure AD)
+CREATE POLICY orders_admin_flat ON orders FOR ALL USING (
+  current_setting('request.jwt.token_type', true) = 'client_credentials'
+  AND current_setting('request.jwt.claims', true)::jsonb -> 'roles' ? 'admin'
+);
+
+-- Combined: works for both Keycloak and flat-roles
+CREATE POLICY orders_admin_any ON orders FOR ALL USING (
+  current_setting('request.jwt.token_type', true) = 'client_credentials'
+  AND (
+    current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ? 'admin'
+    OR
+    current_setting('request.jwt.claims', true)::jsonb -> 'roles' ? 'admin'
+  )
+);
+```
 
 ---
 
 ## PostgreSQL setup
 
 ```sql
--- 1. Enable RLS
-ALTER TABLE products ENABLE ROW LEVEL SECURITY;
-ALTER TABLE products FORCE ROW LEVEL SECURITY;
+-- Non-superuser role (NOBYPASSRLS is critical — superusers always bypass RLS)
+CREATE ROLE esync_app LOGIN PASSWORD 'secret'
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esync_app;
 
--- 2. Service account: admin sees all, tenant-scoped client sees own rows
-CREATE POLICY products_service ON products FOR ALL USING (
-  current_setting('rls.token_type', true) = 'client_credentials'
-  AND (
-    current_setting('rls.role', true) = 'admin'
-    OR tenant_id = current_setting('rls.client_id', true)
-  )
-);
+-- Grant SET on the two GUC params (Postgres 15+)
+GRANT SET ON PARAMETER "request.jwt.claims"     TO esync_app;
+GRANT SET ON PARAMETER "request.jwt.token_type" TO esync_app;
 
--- 3. User: sees only their tenant
-CREATE POLICY products_user ON products FOR SELECT USING (
-  current_setting('rls.token_type', true) = 'user'
-  AND tenant_id = current_setting('rls.tenant_id', true)
-);
-
--- 4. Grant SET on rls.* params (Postgres 15+)
-GRANT SET ON PARAMETER "rls.token_type" TO esync_role;
-GRANT SET ON PARAMETER "rls.user_id"    TO esync_role;
-GRANT SET ON PARAMETER "rls.tenant_id"  TO esync_role;
-GRANT SET ON PARAMETER "rls.client_id"  TO esync_role;
-GRANT SET ON PARAMETER "rls.role"       TO esync_role;
-
--- 5. Indexer role bypasses RLS (separate credentials recommended)
-ALTER ROLE esync_indexer BYPASSRLS;
+-- Enable RLS
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;
 ```
 
 ---
@@ -165,17 +177,20 @@ ALTER ROLE esync_indexer BYPASSRLS;
 { "type": "connection_init", "payload": { "Authorization": "Bearer <token>" } }
 ```
 
-Token is validated once at connect time; the `AuthContext` is reused for all events on that connection.
+Token validated once at connect time; the `AuthContext` is reused for all events on that connection.
 
 ---
 
-## Security notes
+## Debugging
 
-| Topic | Recommendation |
-|---|---|
-| `validation_mode: none` | Dev/test only. Never in production. |
-| `require_auth: false` | Safe only when RLS denies anonymous by default. |
-| `clock_skew_secs` | Keep ≤ 60 s. Default 30. |
-| `client_secret` | Use env var: `client_secret: "${OAUTH2_CLIENT_SECRET}"` |
-| DB role for GraphQL | Non-BYPASSRLS; let RLS do the filtering. |
-| DB role for indexer | BYPASSRLS; use separate `postgres.url`. |
+```sql
+-- Inspect the current JWT context from within any query/function
+SELECT * FROM current_jwt_context();
+-- Returns: token_type, sub, azp, realm_roles, raw_claims
+
+-- Or manually:
+SELECT
+  current_setting('request.jwt.token_type', true) AS token_type,
+  current_setting('request.jwt.claims', true)::jsonb ->> 'sub' AS sub,
+  current_setting('request.jwt.claims', true)::jsonb AS claims;
+```

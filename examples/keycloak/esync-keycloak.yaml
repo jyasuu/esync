@@ -4,8 +4,6 @@ postgres:
 
 elasticsearch:
   url: "https://es.example.com:9200"
-  username: "${ES_USER}"
-  password: "${ES_PASSWORD}"
 
 graphql:
   host: "0.0.0.0"
@@ -13,55 +11,23 @@ graphql:
   playground: false
 
   oauth2:
-    # ── Validation ─────────────────────────────────────────────────────────
     validation_mode: jwks
 
-    # Keycloak JWKS endpoint.
-    # Format (Keycloak 17+, no /auth prefix):
-    #   https://<host>/realms/<realm>/protocol/openid-connect/certs
-    # Format (Keycloak ≤ 16, legacy /auth prefix):
-    #   https://<host>/auth/realms/<realm>/protocol/openid-connect/certs
-    jwks_uri: "https://iam.example.com/realms/service/protocol/openid-connect/certs"
+    # Keycloak 17+:  https://<host>/realms/<realm>/protocol/openid-connect/certs
+    # Keycloak ≤ 16: https://<host>/auth/realms/<realm>/protocol/openid-connect/certs
+    jwks_uri: "https://iam.example.com/auth/realms/service/protocol/openid-connect/certs"
     jwks_cache_ttl_secs: 300
 
-    # iss in Keycloak tokens is the realm URL (no /certs suffix).
-    required_issuer: "https://iam.example.com/realms/service"
-
-    # aud is the client ID by default, or "account" for some flows.
-    # Leave unset to skip audience validation, or set to your resource server client ID.
-    required_audience: "esync-api"
+    required_issuer: "https://iam.example.com/auth/realms/service"
+    # required_audience: "my-api"   # omit to skip audience check
 
     clock_skew_secs: 30
     require_auth: true
 
-    # ── Token-type detection ───────────────────────────────────────────────
-    # Keycloak client-credentials tokens have `azp` but no `session_state`
-    # or user-identity claims — auto-detected without this setting.
-    # Uncomment only if auto-detection fails for your Keycloak setup:
-    # token_type_claim: "gty"
-
-    # ── Client-credential (service account) RLS ───────────────────────────
-    # Keycloak puts realm roles at realm_access.roles (nested object),
-    # not at a top-level `roles` claim.
-    rls_role_claim_path: "realm_access.roles"
-
-    # Keycloak uses `azp` (not `client_id`) for the service account client ID.
-    azp_as_client_id: true
-
-    # ── User token RLS ─────────────────────────────────────────────────────
-    # Map these Keycloak user claims to SET LOCAL rls.<claim> in Postgres.
-    # Keycloak standard user claims:
-    #   sub                  — user UUID (always present)
-    #   preferred_username   — login name
-    #   email                — email address
-    #   given_name / family_name
-    # Custom claims (add via Keycloak mapper → Token Claim Name):
-    #   tenant_id, department, cost_center, etc.
-    rls_user_attributes:
-      - sub
-      - preferred_username
-      - email
-      - tenant_id        # custom claim — add a User Attribute mapper in Keycloak
+    # jwt_claims_param and jwt_token_type_param use their defaults:
+    #   request.jwt.claims      — full JWT payload as jsonb
+    #   request.jwt.token_type  — "user" | "client_credentials" | "anonymous"
+    # No other RLS config needed. Policies extract whatever they need via ::jsonb.
 
 entities:
   - name: Order
@@ -77,5 +43,3 @@ entities:
         pg_type: TEXT
       - name: total
         pg_type: NUMERIC
-      - name: created_at
-        pg_type: TIMESTAMPTZ

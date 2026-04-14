@@ -111,7 +111,7 @@ pub enum RlsTokenType {
 ///     required_audience: "esync-api"
 ///     require_auth: true
 ///     rls_role_claim: roles          # claim → rls.role  (client-credentials)
-///     rls_user_attributes:           # claims → rls.<attr>  (user tokens)
+///     # rls_user_attributes removed — use request.jwt.claims ::jsonb in policies
 ///       - sub
 ///       - tenant_id
 ///       - email
@@ -133,7 +133,7 @@ pub enum RlsTokenType {
 ///     require_auth: false            # allow anonymous when no Authorization header
 ///     token_type_claim: "gty"        # override auto-detection claim
 ///     rls_role_claim: "roles"        # for client-credential tokens
-///     rls_user_attributes:           # for user tokens
+///     # rls_user_attributes removed — use request.jwt.claims ::jsonb in policies
 ///       - sub
 ///       - tenant_id
 ///       - email
@@ -181,43 +181,32 @@ pub struct OAuth2Config {
     #[serde(default)]
     pub require_auth: bool,
 
-    // ── Token-type detection ──────────────────────────────────────────────
-    /// Name of a claim that carries the grant type for explicit detection.
-    /// Defaults to auto-detection heuristics (`gty`, `grant_type`, presence of
-    /// `client_id` without user-identity claims).
-    #[serde(default)]
-    pub token_type_claim: Option<String>,
-
-    // ── RLS injection — client-credential tokens ──────────────────────────
-    /// Name of the claim whose value becomes `rls.role`.
-    /// Accepts a space-separated list or JSON array — first value is used.
-    /// Default: `"roles"` (falls back to first word of `scope`).
-    #[serde(default)]
-    pub rls_role_claim: Option<String>,
-
-    /// Dot-separated path to a nested roles array.
-    /// Use this for Keycloak which stores roles at `realm_access.roles`.
+    // ── RLS — JWT claims injection ────────────────────────────────────────
+    /// GUC parameter name that receives the full JWT payload as a JSON string.
+    /// Default: `"request.jwt.claims"` (PostgREST-compatible).
     ///
-    /// Examples:
-    ///   `rls_role_claim_path: "realm_access.roles"`           # Keycloak realm roles
-    ///   `rls_role_claim_path: "resource_access.my-api.roles"` # Keycloak client roles
+    /// Postgres policies use `::jsonb` to query any claim directly:
     ///
-    /// When set, takes precedence over `rls_role_claim`.
-    #[serde(default)]
-    pub rls_role_claim_path: Option<String>,
+    /// ```sql
+    /// -- Any claim
+    /// current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
+    /// current_setting('request.jwt.claims', true)::jsonb ->> 'azp'
+    ///
+    /// -- Keycloak nested roles (array contains check)
+    /// current_setting('request.jwt.claims', true)::jsonb
+    ///   -> 'realm_access' -> 'roles' ? 'admin'
+    ///
+    /// -- Custom claim
+    /// current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
+    /// ```
+    ///
+    /// Set to `""` to disable GUC injection entirely (not recommended).
+    #[serde(default = "default_jwt_claims_param")]
+    pub jwt_claims_param: String,
+}
 
-    /// Use the `azp` (authorized party) claim as `rls.client_id` instead of
-    /// `client_id`. Keycloak client-credentials tokens carry the client ID in
-    /// `azp`, not `client_id`. Default: false.
-    #[serde(default)]
-    pub azp_as_client_id: bool,
-
-    // ── RLS injection — user tokens ───────────────────────────────────────
-    /// List of claim names to extract from user tokens and expose as
-    /// `SET LOCAL rls.<n> = '<value>'` before each query.
-    /// Example: `[sub, tenant_id, email, department]`
-    #[serde(default)]
-    pub rls_user_attributes: Vec<String>,
+fn default_jwt_claims_param() -> String {
+    "request.jwt.claims".into()
 }
 
 // ── Entity config ─────────────────────────────────────────────────────────

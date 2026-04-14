@@ -192,12 +192,17 @@ pub async fn fetch_by_ids(
 
 /// Execute `SET LOCAL <key> = '<value>'` for each RLS parameter inside an
 /// open sqlx transaction.
+///
+/// The value is a plain string for `request.jwt.token_type` and a compact
+/// JSON string for `request.jwt.claims`.  Single quotes in the value are
+/// doubled (`''`) per Postgres string literal rules.  JSON uses `\"` for
+/// internal strings so no additional escaping is needed for JSON content.
 pub async fn set_rls_params(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     params: &[(String, String)],
 ) -> Result<()> {
     for (key, val) in params {
-        // Escape single quotes in the value to prevent SQL injection.
+        // Double single quotes to produce a valid Postgres string literal.
         let escaped = val.replace('\'', "''");
         let sql = format!("SET LOCAL {key} = '{escaped}'");
         sqlx::query(&sql).execute(&mut **tx).await?;
@@ -207,12 +212,10 @@ pub async fn set_rls_params(
 
 /// Fetch rows with RLS parameters set for this transaction.
 ///
-/// When `rls_params` is empty (OAuth2 disabled, no config) the fast-path
-/// is taken — no transaction overhead.  When OAuth2 IS configured, callers
-/// always pass at least `[("rls.token_type", "<type>")]` (including for
-/// anonymous requests where type = "anonymous"), so the transaction path
-/// always runs and `SET LOCAL rls.token_type` reaches the Postgres session
-/// where RLS policies can inspect it.
+/// When `rls_params` is empty (OAuth2 not configured) the fast-path is taken —
+/// no transaction wrapper.  When OAuth2 IS configured, `rls_params` always
+/// contains at least `request.jwt.token_type`, so the transaction always runs
+/// and Postgres GUC values are visible to RLS policies.
 pub async fn fetch_rows_rls(
     pool: &PgPool,
     source: &str,
