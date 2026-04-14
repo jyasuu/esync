@@ -30,7 +30,7 @@ grant_type=password&client_id={{client_id}}&client_secret={{client_secret}}&user
 
 HTTP 200
 [Asserts]
-jsonpath "$.token_type" == "Bearer"
+jsonpath "$.token_type" == "Bearer"   # OAuth2 response field, not esync RLS concept
 jsonpath "$.access_token" exists
 [Captures]
 access_token: jsonpath "$.access_token"
@@ -41,8 +41,8 @@ access_token: jsonpath "$.access_token"
 #  expected claim structure. Adjust assertions to your realm/client setup.)
 
 # ── Step 3: Use token against esync GraphQL ──────────────────────────────
-# User token → rls.token_type = 'user', rls.sub = <uuid>, rls.email = <email>
-# RLS policies can now filter rows by user identity.
+# User token → request.jwt.claims contains sub, email, and other claims.
+# RLS policies query them directly via ::jsonb.
 POST {{gql_url}}
 Authorization: Bearer {{access_token}}
 Content-Type: application/json

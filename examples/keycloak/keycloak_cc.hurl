@@ -24,7 +24,7 @@ grant_type=client_credentials&client_id={{client_id}}&client_secret={{client_sec
 
 HTTP 200
 [Asserts]
-jsonpath "$.token_type" == "Bearer"
+jsonpath "$.token_type" == "Bearer"   # OAuth2 response field, not esync RLS concept
 jsonpath "$.access_token" exists
 [Captures]
 access_token: jsonpath "$.access_token"

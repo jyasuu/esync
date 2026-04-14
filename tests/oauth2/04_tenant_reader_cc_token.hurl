@@ -1,6 +1,6 @@
 # 04_tenant_reader_cc_token.hurl
-# Client-credentials token with roles=["tenant-reader"] sets rls.role='tenant-reader'.
-# The products_tenant_reader RLS policy adds active=true filter.
+# Client-credentials token with roles=["tenant-reader"].
+# The products_tenant_reader RLS policy: realm_access.roles ? 'tenant-reader' AND active=true.
 # → same visibility as user token: no inactive rows.
 
 POST {{gql_url}}

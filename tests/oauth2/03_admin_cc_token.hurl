@@ -1,11 +1,8 @@
 # 03_admin_cc_token.hurl
-# Client-credentials token with roles=["admin"] sets:
-#   rls.token_type  = 'client_credentials'
-#   rls.role        = 'admin'
-#   rls.client_id   = 'svc-1'
-#
-# The products_admin RLS policy: FOR ALL USING (token_type='client_credentials' AND role='admin')
-# → no active filter, so the inactive product (..004) is also visible.
+# Client-credentials token with roles=["admin"].
+# The products_admin RLS policy checks:
+#   realm_access.roles ? 'admin'  OR  roles ? 'admin'
+# No active filter → the inactive product (..004) is also visible.
 
 POST {{gql_url}}
 Authorization: Bearer {{cc_admin_token}}

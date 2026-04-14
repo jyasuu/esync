@@ -258,7 +258,7 @@ jobs:
             --    block ALL rows for ALL roles including the ones below.
 
             -- Policies use request.jwt.claims ::jsonb directly.
-            -- No token_type abstraction — policies query JWT claims they care about.
+            -- Policies query JWT claims directly via ::jsonb.
 
             -- Any authenticated user (has a 'sub' claim): sees active products.
             CREATE POLICY products_user ON products FOR SELECT USING (

@@ -185,7 +185,7 @@ pub async fn fetch_by_ids(
 // These functions run a user-visible query inside an explicit transaction,
 // emit `SET LOCAL rls.<key> = '<value>'` for each auth context parameter
 // before the query, then commit.  PostgreSQL RLS policies can then reference
-// `current_setting('rls.user_id', true)` etc.
+// `current_setting('request.jwt.claims', true)::jsonb` etc.
 //
 // We use SET LOCAL (not SET) so the settings are scoped to this transaction
 // and don't leak to the next connection from the pool.
@@ -193,8 +193,8 @@ pub async fn fetch_by_ids(
 /// Execute `SET LOCAL <key> = '<value>'` for each RLS parameter inside an
 /// open sqlx transaction.
 ///
-/// The value is a plain string for `request.jwt.token_type` and a compact
-/// JSON string for `request.jwt.claims`.  Single quotes in the value are
+/// The value is a compact JSON string for `request.jwt.claims`.
+/// Single quotes in the value are
 /// doubled (`''`) per Postgres string literal rules.  JSON uses `\"` for
 /// internal strings so no additional escaping is needed for JSON content.
 pub async fn set_rls_params(
@@ -214,7 +214,7 @@ pub async fn set_rls_params(
 ///
 /// When `rls_params` is empty (OAuth2 not configured) the fast-path is taken —
 /// no transaction wrapper.  When OAuth2 IS configured, `rls_params` always
-/// contains at least `request.jwt.token_type`, so the transaction always runs
+/// contains `request.jwt.claims`, so the transaction always runs
 /// and Postgres GUC values are visible to RLS policies.
 pub async fn fetch_rows_rls(
     pool: &PgPool,

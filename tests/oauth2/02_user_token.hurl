@@ -1,6 +1,6 @@
 # 02_user_token.hurl
-# A valid user JWT sets rls.token_type='user'.
-# The products_user RLS policy allows only active=true rows.
+# A valid user JWT has a 'sub' claim.
+# The products_user RLS policy: sub IS NOT NULL AND active=true.
 # Seed data: 4 active (UUIDs ..001-003, ..005) + 1 inactive (..004 "Delta Thing").
 
 POST {{gql_url}}

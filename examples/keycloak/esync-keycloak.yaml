@@ -24,10 +24,8 @@ graphql:
     clock_skew_secs: 30
     require_auth: true
 
-    # jwt_claims_param and jwt_token_type_param use their defaults:
-    #   request.jwt.claims      — full JWT payload as jsonb
-    #   request.jwt.token_type  — "user" | "client_credentials" | "anonymous"
-    # No other RLS config needed. Policies extract whatever they need via ::jsonb.
+    # jwt_claims_param default: "request.jwt.claims"
+    # Policies use ::jsonb to extract any claim — no other RLS config needed.
 
 entities:
   - name: Order

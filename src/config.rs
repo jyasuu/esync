@@ -110,8 +110,7 @@ pub enum RlsTokenType {
 ///     required_issuer: "https://auth.example.com/"
 ///     required_audience: "esync-api"
 ///     require_auth: true
-///     rls_role_claim: roles          # claim → rls.role  (client-credentials)
-///     # rls_user_attributes removed — use request.jwt.claims ::jsonb in policies
+///     # Policies use request.jwt.claims ::jsonb — no per-claim config needed.
 ///       - sub
 ///       - tenant_id
 ///       - email
@@ -131,9 +130,7 @@ pub enum RlsTokenType {
 ///     required_audience: "esync-api"
 ///     clock_skew_secs: 30
 ///     require_auth: false            # allow anonymous when no Authorization header
-///     token_type_claim: "gty"        # override auto-detection claim
-///     rls_role_claim: "roles"        # for client-credential tokens
-///     # rls_user_attributes removed — use request.jwt.claims ::jsonb in policies
+///     # Policies use request.jwt.claims ::jsonb — no per-claim config needed.
 ///       - sub
 ///       - tenant_id
 ///       - email

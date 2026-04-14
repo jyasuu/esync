@@ -6,7 +6,6 @@ esync sets **two** Postgres GUC parameters via `SET LOCAL` before each query:
 
 | Parameter | Value | Usage |
 |---|---|---|
-| `request.jwt.token_type` | `"user"` / `"client_credentials"` / `"anonymous"` | Cheap string comparison to branch policy |
 | `request.jwt.claims` | Full JWT payload as compact JSON string | Extract any claim with `::jsonb` operators |
 
 This is the same convention as **PostgREST** — existing PostgREST-style RLS policies work unchanged.
@@ -43,7 +42,7 @@ graphql:
     jwks_uri: "https://iam.example.com/auth/realms/service/protocol/openid-connect/certs"
     required_issuer: "https://iam.example.com/auth/realms/service"
     require_auth: true
-    # That's it. No rls_role_claim, no rls_user_attributes.
+    # That's it. Policies use ::jsonb directly.
     # Policies use ::jsonb to extract whatever they need.
 ```
 
@@ -54,8 +53,8 @@ graphql:
 ### Branch on token type (fast, no JSON parsing)
 
 ```sql
-current_setting('request.jwt.token_type', true) = 'user'
-current_setting('request.jwt.token_type', true) = 'client_credentials'
+current_setting('request.jwt.claims', true)::jsonb ->> 'sub' IS NOT NULL   -- authenticated user
+current_setting('request.jwt.claims', true)::jsonb ->> 'azp' IS NOT NULL    -- service account
 ```
 
 ### Extract any claim
@@ -85,7 +84,7 @@ current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
 ```sql
 -- Users see only their own orders
 CREATE POLICY orders_own ON orders FOR SELECT USING (
-  current_setting('request.jwt.token_type', true) = 'user'
+  current_setting('request.jwt.claims', true)::jsonb ->> 'sub' IS NOT NULL
   AND user_id::text = (
     current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
   )
@@ -93,21 +92,17 @@ CREATE POLICY orders_own ON orders FOR SELECT USING (
 
 -- Service account with Keycloak realm role 'admin' sees everything
 CREATE POLICY orders_admin ON orders FOR ALL USING (
-  current_setting('request.jwt.token_type', true) = 'client_credentials'
-  AND current_setting('request.jwt.claims', true)::jsonb
-      -> 'realm_access' -> 'roles' ? 'admin'
+  current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ? 'admin'
 );
 
 -- Service account with client role 'data-reader' sees active orders only
 CREATE POLICY orders_reader ON orders FOR SELECT USING (
-  current_setting('request.jwt.token_type', true) = 'client_credentials'
-  AND current_setting('request.jwt.claims', true)::jsonb
-      -> 'resource_access' -> 'my-api' -> 'roles' ? 'data-reader'
+  current_setting('request.jwt.claims', true)::jsonb -> 'resource_access' -> 'my-api' -> 'roles' ? 'data-reader'
 );
 
 -- Multi-tenant: users see their tenant's rows (custom claim)
 CREATE POLICY products_tenant ON products FOR SELECT USING (
-  current_setting('request.jwt.token_type', true) = 'user'
+  current_setting('request.jwt.claims', true)::jsonb ->> 'sub' IS NOT NULL
   AND tenant_id::text = (
     current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
   )
@@ -125,7 +120,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esync_app
 
 -- Postgres 15+: grant SET permission for the two GUC params
 GRANT SET ON PARAMETER "request.jwt.claims"     TO esync_app;
-GRANT SET ON PARAMETER "request.jwt.token_type" TO esync_app;
 
 -- Enable RLS
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;

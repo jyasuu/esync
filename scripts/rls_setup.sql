@@ -1,6 +1,6 @@
 -- ============================================================
 -- RLS setup script for esync OAuth2 authentication
--- Uses request.jwt.claims (::jsonb) and request.jwt.token_type
+-- Uses only request.jwt.claims (::jsonb) — no token_type param.
 -- Compatible with PostgREST-style policies.
 -- ============================================================
 
@@ -14,61 +14,52 @@ CREATE ROLE esync_graphql LOGIN PASSWORD 'change_me_graphql'
 CREATE ROLE esync_indexer LOGIN PASSWORD 'change_me_indexer';
 ALTER ROLE esync_indexer BYPASSRLS;
 
--- Grant table access to both roles
+-- Grant table access
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esync_graphql;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esync_indexer;
 
--- ── 2. Grant SET on the two JWT GUC params (Postgres 15+) ────────────────
--- Only two parameters needed regardless of how many claims your IdP issues.
-GRANT SET ON PARAMETER "request.jwt.claims"     TO esync_graphql;
-GRANT SET ON PARAMETER "request.jwt.token_type" TO esync_graphql;
+-- ── 2. Grant SET on request.jwt.claims (Postgres 15+) ────────────────────
+GRANT SET ON PARAMETER "request.jwt.claims" TO esync_graphql;
 
 -- ── 3. Example: multi-tenant products table ───────────────────────────────
 
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE products FORCE ROW LEVEL SECURITY;
 
--- Users see only their own tenant's active products.
--- tenant_id comes from a custom claim (add via Keycloak mapper or IdP config).
+-- Authenticated users (has a sub claim) see only their own tenant's active products.
 CREATE POLICY products_user ON products
   FOR SELECT
   USING (
-    current_setting('request.jwt.token_type', true) = 'user'
+    current_setting('request.jwt.claims', true)::jsonb ->> 'sub' IS NOT NULL
     AND tenant_id::text = (
       current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
     )
   );
 
--- Authenticated users can only insert into their own tenant.
+-- Write: users can only insert into their own tenant.
 CREATE POLICY products_user_write ON products
   FOR INSERT
   WITH CHECK (
-    current_setting('request.jwt.token_type', true) = 'user'
+    current_setting('request.jwt.claims', true)::jsonb ->> 'sub' IS NOT NULL
     AND tenant_id::text = (
       current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
     )
   );
 
--- Admin service account: sees all rows.
--- Checks both Keycloak (realm_access.roles) and flat-roles IdPs.
+-- Admin service account (Keycloak realm role 'admin') sees all rows.
 CREATE POLICY products_admin ON products
   FOR ALL
   USING (
-    current_setting('request.jwt.token_type', true) = 'client_credentials'
-    AND (
-      current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ? 'admin'
-      OR
-      current_setting('request.jwt.claims', true)::jsonb -> 'roles' ? 'admin'
-    )
+    current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ? 'admin'
+    OR
+    current_setting('request.jwt.claims', true)::jsonb -> 'roles' ? 'admin'
   );
 
--- Tenant-scoped service account: sees only its own tenant.
--- Uses azp (Keycloak: authorized party = client ID) as the tenant identifier.
+-- Tenant-scoped service account: sees only its own tenant's rows (azp = client ID).
 CREATE POLICY products_service_tenant ON products
   FOR ALL
   USING (
-    current_setting('request.jwt.token_type', true) = 'client_credentials'
-    AND NOT (
+    NOT (
       current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ? 'admin'
       OR
       current_setting('request.jwt.claims', true)::jsonb -> 'roles' ? 'admin'
@@ -87,17 +78,17 @@ ALTER TABLE orders FORCE ROW LEVEL SECURITY;
 CREATE POLICY orders_user ON orders
   FOR SELECT
   USING (
-    current_setting('request.jwt.token_type', true) = 'user'
-    AND user_id::text = (
+    user_id::text = (
       current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
     )
   );
 
--- Service accounts see all orders.
+-- Service accounts (have azp, no sub-based user ownership) see all orders.
 CREATE POLICY orders_service ON orders
   FOR ALL
   USING (
-    current_setting('request.jwt.token_type', true) = 'client_credentials'
+    current_setting('request.jwt.claims', true)::jsonb ->> 'azp' IS NOT NULL
+    AND current_setting('request.jwt.claims', true)::jsonb ->> 'azp' != ''
   );
 
 -- ── 5. Helper: inspect current JWT context (for debugging) ───────────────
@@ -105,16 +96,13 @@ CREATE POLICY orders_service ON orders
 CREATE OR REPLACE FUNCTION current_jwt_context()
 RETURNS TABLE(key text, value text)
 LANGUAGE sql STABLE AS $$
-  SELECT 'token_type', current_setting('request.jwt.token_type', true)
+  SELECT 'sub',         current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
   UNION ALL
-  SELECT 'sub',        current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
+  SELECT 'azp',         current_setting('request.jwt.claims', true)::jsonb ->> 'azp'
   UNION ALL
-  SELECT 'azp',        current_setting('request.jwt.claims', true)::jsonb ->> 'azp'
+  SELECT 'realm_roles', (current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' ->> 'roles')
   UNION ALL
-  SELECT 'realm_roles',
-    (current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' ->> 'roles')
-  UNION ALL
-  SELECT 'raw_claims', current_setting('request.jwt.claims', true);
+  SELECT 'raw_claims',  current_setting('request.jwt.claims', true);
 $$;
 
 -- Usage: SELECT * FROM current_jwt_context();

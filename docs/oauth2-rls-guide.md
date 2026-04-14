@@ -49,7 +49,7 @@ graphql:
     # jwt_claims_param: "request.jwt.claims"   # default, PostgREST-compatible
 ```
 
-That's it. No `rls_role_claim`, no `rls_user_attributes`. Policies read directly from the JWT.
+That's it. Policies read directly from the JWT via `::jsonb` — no esync-specific claim config needed.
 
 ### Keycloak
 
@@ -112,37 +112,32 @@ current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' 
 ```sql
 -- Users see only their own rows
 CREATE POLICY orders_own ON orders FOR SELECT USING (
-  current_setting('request.jwt.token_type', true) = 'user'
-  AND user_id::text = (
+    AND user_id::text = (
     current_setting('request.jwt.claims', true)::jsonb ->> 'sub'
   )
 );
 
 -- Multi-tenant: users see their tenant (custom claim from IdP mapper)
 CREATE POLICY products_tenant ON products FOR SELECT USING (
-  current_setting('request.jwt.token_type', true) = 'user'
-  AND tenant_id::text = (
+    AND tenant_id::text = (
     current_setting('request.jwt.claims', true)::jsonb ->> 'tenant_id'
   )
 );
 
 -- Keycloak service account with realm role 'admin' sees everything
 CREATE POLICY orders_admin ON orders FOR ALL USING (
-  current_setting('request.jwt.token_type', true) = 'client_credentials'
-  AND current_setting('request.jwt.claims', true)::jsonb
+    AND current_setting('request.jwt.claims', true)::jsonb
       -> 'realm_access' -> 'roles' ? 'admin'
 );
 
 -- Same policy, flat-roles IdP (Auth0, Azure AD)
 CREATE POLICY orders_admin_flat ON orders FOR ALL USING (
-  current_setting('request.jwt.token_type', true) = 'client_credentials'
-  AND current_setting('request.jwt.claims', true)::jsonb -> 'roles' ? 'admin'
+    AND current_setting('request.jwt.claims', true)::jsonb -> 'roles' ? 'admin'
 );
 
 -- Combined: works for both Keycloak and flat-roles
 CREATE POLICY orders_admin_any ON orders FOR ALL USING (
-  current_setting('request.jwt.token_type', true) = 'client_credentials'
-  AND (
+    AND (
     current_setting('request.jwt.claims', true)::jsonb -> 'realm_access' -> 'roles' ? 'admin'
     OR
     current_setting('request.jwt.claims', true)::jsonb -> 'roles' ? 'admin'
@@ -162,7 +157,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO esync_app
 
 -- Grant SET on the two GUC params (Postgres 15+)
 GRANT SET ON PARAMETER "request.jwt.claims"     TO esync_app;
-GRANT SET ON PARAMETER "request.jwt.token_type" TO esync_app;
 
 -- Enable RLS
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
@@ -186,11 +180,10 @@ Token validated once at connect time; the `AuthContext` is reused for all events
 ```sql
 -- Inspect the current JWT context from within any query/function
 SELECT * FROM current_jwt_context();
--- Returns: token_type, sub, azp, realm_roles, raw_claims
+-- Returns: sub, azp, realm_roles, raw_claims
 
 -- Or manually:
 SELECT
-  current_setting('request.jwt.token_type', true) AS token_type,
   current_setting('request.jwt.claims', true)::jsonb ->> 'sub' AS sub,
   current_setting('request.jwt.claims', true)::jsonb AS claims;
 ```
